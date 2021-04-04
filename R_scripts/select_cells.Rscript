@@ -1,0 +1,51 @@
+#! /bin/env Rscript
+
+#'
+#' 1. read replicate seurat
+#' 2. read vector of cells to keep
+#' 3. filter the seurat to keep specified cells
+#' 5. save the seurat
+#' 
+
+#+ load libraries
+library(Seurat)
+library(magrittr)
+library(tidyverse)
+
+getwd() %>% str_split('/') %>% unlist() %>% head(n=10) %>% str_c(collapse='/') %>% file.path(., 'scripts', 'seurat_processing', 'helper_functions.R') %>% source()
+
+packageVersion('Seurat') %>% sprintf(fmt='/// Seurat version: %s') %>% message()
+
+#+ collect_environment_variables
+input_seurat_rds <- Sys.getenv(x='INPUT_SEURAT_RDS')
+cell_filter_rds <- Sys.getenv(x='CELL_FILTER_RDS')
+save_path <- Sys.getenv(x='OUTPUT_PATH')
+provenance_name <- Sys.getenv(x='PROVENANCE_NAME', unset=get_script_step_name())
+
+#+ load_seurat
+sprintf('/// Loading seurat: %s', input_seurat_rds) %>% message()
+seurat <- readRDS(file=input_seurat_rds)
+
+sprintf('/// Loading cells to filter from: %s', cell_filter_rds) %>% message()
+cells_filter <- readRDS(file=cell_filter_rds)
+
+#+ select_specified_cells
+sprintf('/// selecting cells from: %s', Project(seurat)) %>% message()
+seurat %<>%
+  subset(cells=cells_filter)
+
+#+ check_n_cells
+sprintf('/// checking n cells for: %s', Project(seurat)) %>% message()
+if(length(cells_filter)!=ncol(seurat))
+  sprintf('number of cells in cells_filter [%s] did not match filtered seurat [%s] for %s', length(cells_filter), ncol(seurat), Project(seurat)) %>% stop()
+
+#+ remove_reductions
+sprintf('/// removing reductions from: %s', Project(seurat)) %>% message()
+for(reduction in Reductions(seurat))
+  seurat[[reduction]] <- NULL
+
+#+ save_results
+save_seurat(seurat=seurat, save_path=save_path, script_name=provenance_name)
+
+#+ finish
+sprintf('/// done %s', Project(seurat)) %>% message()

@@ -1,0 +1,207 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+.libPaths(c("/camp/lab/briscoej/working/Rory/.conda/my_envs/r_lab/lib/R/library",
+          "/camp/lab/briscoej/working/Rory/R_packages",
+          "/camp/home/maizelr/R/x86_64-pc-linux-gnu-library/3.6",
+          "/camp/apps/eb/software/R/3.6.2-foss-2019b/lib64/R/library"))
+```
+
+
+```{r}
+# load libraries
+library(sctree);
+library(Seurat);
+library(ggplot2);
+library(cowplot);
+library(patchwork);
+library(plyr);
+library(dplyr);
+library(data.table);
+library(RColorBrewer);
+library(grDevices);
+```
+
+```{r}
+human <- readRDS('../../seurat_objects/human_celltyped.rds')
+mouse <- readRDS('../../seurat_objects/mouse_celltyped.rds')
+```
+
+```{r}
+# from Antler
+fastCor <- function(x, method='spearman', subdims){
+  if(method=='spearman'){
+    # rank features
+    x = t(apply(t(x), 1, rank))
+  } else if(method=='pearson'){
+    x = t(x)
+  } else {
+    stop("Fast correlation works only with 'spearman' or 'pearson'")
+  }
+  # Center each variable
+  x = x - rowMeans(x);
+  # Standardize each variable
+  x = x / sqrt(rowSums(x^2));
+
+  # Calculate correlations
+  if(missing(subdims)){
+    return(tcrossprod(x))
+  } else {
+    return(tcrossprod(x, x[subdims, , drop=F]))
+  }
+
+}
+
+# from Sanchez-Taltavull et al., NAR Genomics and Bioinformatics 2:1, 2020
+BaCo <- function(X){
+  
+  alpha0 <- rep(1/nrow(X),ncol(X))
+  beta0=1-alpha0
+  nrowsX <- nrow(X)
+  k <- ncol(X)
+  cs <- colSums(X)
+  alphas <- alpha0 + X
+  betas  <- matrix(rep(beta0,nrowsX), nrow=nrowsX, byrow=TRUE) + matrix(rep(cs,nrowsX), nrow=nrowsX, byrow=TRUE) - X
+  alphasPLUSbetas <- alphas + betas
+  Psi <- alphas/alphasPLUSbetas - matrix(rep(rowSums(alphas/alphasPLUSbetas)/k, k), ncol=k, byrow=FALSE) 
+  var_vec <- as.matrix( ( rowSums( (alphas*betas)/( (alphasPLUSbetas^2)*(alphasPLUSbetas+1) ) ) + rowSums(Psi^2) )/k )
+  cov_mtrx <- (Psi %*% t(Psi))/k
+  Bcorrvals <- cov_mtrx / sqrt( var_vec %*% t(var_vec) )
+  diag(Bcorrvals) <- 1
+  return(Bcorrvals)
+}
+```
+
+
+```{r}
+hfp <- human[,human$Type_step2=='FP']
+mfp <- mouse[,mouse$Type_step2=='FP']
+```
+
+```{r}
+sum(GetAssayData(hfp, assay = 'RNA')['PAX7',]>0)/length(GetAssayData(hfp, assay = 'RNA')['PAX7',])
+sum(GetAssayData(mfp, assay = 'RNA')['Pax7',]>0)/length(GetAssayData(mfp, assay = 'RNA')['Pax7',])
+```
+
+```{r}
+hfp2 <- hfp[,hfp$orig.timepoint!='CS19']
+
+sum(GetAssayData(hfp2, assay = 'RNA')['PAX7',]>0)
+
+length(hfp2$orig.ident)
+```
+
+
+
+
+```{r}
+DefaultAssay(hfp) <- 'SCT'
+hfp2 <- FindVariableFeatures(hfp, nfeatures = 1000, mean.cutoff = c(0.1, 8))
+hfp2 <- hfp2[VariableFeatures(hfp2),]
+exp_mat <- GetAssayData(object = hfp2, assay = 'SCT')
+exp_dat <- as.matrix(exp_mat)
+```
+
+
+```{r}
+cor_M <- fastCor(t(exp_dat))
+```
+
+```{r}
+pax7_cors <- sort(cor_M[,'PAX7'], decreasing = TRUE)
+print('TOP GENES:')
+names(head(pax7_cors, 30))
+```
+
+```{r}
+genes <- names(head(pax7_cors, 30))
+DefaultAssay(hfp) <- 'RNA'
+Idents(hfp) <- 'orig.timepoint'
+exdata <- as.data.frame(hfp, genes = genes)
+identity <- Idents(hfp)
+exdata$Cell <- rownames(exdata)
+exdata$Timepoint <- identity
+# names(exdata) <- gsub('.','-',names(exdata), fixed = TRUE)
+exdata <- reshape2::melt(exdata, id.vars = c("Cell","Timepoint"), measure.vars = genes,
+                         variable.name = "Feat", value.name = "Expr")
+```
+
+
+```{r}
+exdata %>%
+  group_by(Feat) %>%
+  summarise(mean_value=mean(Expr)) -> hfp_exdata
+```
+
+```{r}
+genes <- tools::toTitleCase(tolower(genes))
+DefaultAssay(mfp) <- 'RNA'
+Idents(mfp) <- 'orig.timepoint'
+exdata <- as.data.frame(mfp, genes = genes)
+identity <- Idents(mfp)
+exdata$Cell <- rownames(exdata)
+exdata$Timepoint <- identity
+
+a <- genes
+b <- colnames(exdata)[1:25]
+c <- a[!(a %in% b)]
+for (ci in c){
+  exdata[ci] <- rep(0, dim(exdata)[1])
+}
+
+# names(exdata) <- gsub('.','-',names(exdata), fixed = TRUE)
+exdata <- reshape2::melt(exdata, id.vars = c("Cell","Timepoint"), measure.vars = genes,
+                         variable.name = "Feat", value.name = "Expr")
+
+exdata %>%
+  group_by(Feat) %>%
+  summarise(mean_value=mean(Expr)) -> mfp_exdata
+```
+
+
+```{r}
+dis <- c('dp3','dp4','dp5','dp6')
+
+hpd <- human[,human$Type_step2 %in% dis]
+
+genes <- names(head(pax7_cors, 30))
+
+
+DefaultAssay(hpd) <- 'RNA'
+Idents(hpd) <- 'orig.timepoint'
+exdata <- as.data.frame(hpd, genes = genes)
+identity <- Idents(hpd)
+exdata$Cell <- rownames(exdata)
+exdata$Timepoint <- identity
+# names(exdata) <- gsub('.','-',names(exdata), fixed = TRUE)
+exdata <- reshape2::melt(exdata, id.vars = c("Cell","Timepoint"), measure.vars = genes,
+                         variable.name = "Feat", value.name = "Expr")
+
+exdata %>%
+  group_by(Feat) %>%
+  summarise(mean_value=mean(Expr)) -> hpd_exdata
+```
+
+```{r}
+hpd_exdata
+hfp_exdata
+mfp_exdata
+```
+
+```{r}
+df <- data.frame(Gene=hfp_exdata$Feat, 'Human_FP'=hfp_exdata$mean_value, 'Human_pD'=hpd_exdata$mean_value, 'Mouse_FP'=mfp_exdata$mean_value)
+```
+
+
+```{r}
+
+```
+
+
+
+
+
+

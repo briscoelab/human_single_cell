@@ -1,0 +1,86 @@
+---
+title: "4.2_doublet_sanity_check"
+output: html_notebook
+---
+
+```{r}
+.libPaths(c("/camp/lab/briscoej/working/Rory/.conda/my_envs/r_lab/lib/R/library",
+          "/camp/lab/briscoej/working/Rory/R_packages",
+          "/camp/home/maizelr/R/x86_64-pc-linux-gnu-library/3.6",
+          "/camp/apps/eb/software/R/3.6.2-foss-2019b/lib64/R/library"))
+```
+
+```{r}
+# load libraries
+library(sctree);
+library(Seurat);
+library(ggplot2);
+library(cowplot);
+library(patchwork);
+library(plyr);
+library(dplyr);
+library(data.table);
+```
+
+# 1. Load, process data
+```{r}
+human_path <- '../../seurat_objects/human_neural.rds'
+mouse_path <- '../../seurat_objects/mouse_neural.rds'
+
+human_data <- readRDS(human_path)
+mouse_data <- readRDS(mouse_path)
+```
+
+```{r}
+# don't consider e8.5
+m_tps <- c("E95","E105","E115","E125","E135")
+h_tps <- unique(human_data@meta.data$orig.timepoint)
+
+process_dataset <- function(data, gene_names){
+  # subset only relevant cells, based on Olig2 and Nkx2-2
+  o.exp = GetAssayData(object = data, assay = "RNA", slot = "data")[gene_names[1],]
+  n.exp = GetAssayData(object = data, assay = "RNA", slot = "data")[gene_names[2],]
+  s.exp = GetAssayData(object = data, assay = "RNA", slot = "data")[gene_names[3],]
+  pos_cells <- names(which((o.exp>0 | n.exp>0) & s.exp>0))
+  subsetted_cells <- subset(data,cells=pos_cells)
+  
+  #classify each cell based on marker expression
+  so.exp = GetAssayData(object = subsetted_cells, assay = "RNA", slot = "data")[gene_names[1],]
+  sn.exp = GetAssayData(object = subsetted_cells, assay = "RNA", slot = "data")[gene_names[2],]
+  olig <- which(so.exp>0 & sn.exp==0)
+  nkx2 <- which(so.exp==0 & sn.exp>0)
+  both <- which(so.exp>0 & sn.exp>0)
+  
+  # add ID info
+  cell_ids <- rep(0,dim(subsetted_cells@meta.data)[1])
+  cell_ids[olig] <- 'Olig2+'
+  cell_ids[nkx2] <- 'Nkx2-2+'
+  cell_ids[both] <- 'Olig2+/Nkx2-2+'
+  subsetted_cells@meta.data['expression_type'] <- cell_ids
+  
+  # for SCT slot, we want to select highly variable genes for this relevant population
+  subsetted_cells <- FindVariableFeatures(subsetted_cells, nfeatures = 5000, assay = 'SCT');
+  
+  DefaultAssay(subsetted_cells) <- 'SCT'
+  all.genes <- rownames(subsetted_cells)
+  subsetted_cells <- ScaleData(subsetted_cells, features = all.genes);
+  
+  # rerun PCA & UMAP. Do both for SCT and integrated.
+  subsetted_cells <- RunPCA(subsetted_cells, assay = 'SCT', npcs = 50, verbose = FALSE, reduction.name='sct_pca');
+  subsetted_cells <- RunUMAP(subsetted_cells, assay = 'SCT', reduction = "sct_pca", dims = 1:20, reduction.name='sct_umap', verbose = FALSE);
+  
+  return(subsetted_cells)
+}
+
+h.data <- process_dataset(human_data, gene_names = c('OLIG2','NKX2-2','SOX2'))
+m.data <- process_dataset(mouse_data, gene_names = c('Olig2','Nkx2-2','Sox2'))
+```
+
+```{r}
+Idents(h.data) <- 'expression_type'
+plot1 <- FeatureScatter(h.data, feature1 = "nCount_RNA", feature2 = "nFeature_RNA",)
+plot1 <- plot1 + ggtitle('QC Metrics Across Cell Types') + xlab('No. Counts') + ylab('No. Features')
+plot1
+ggsave('../plots/4_DP_cells_QC_Metrics.pdf')
+```
+

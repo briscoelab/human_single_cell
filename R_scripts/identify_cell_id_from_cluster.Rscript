@@ -1,0 +1,71 @@
+#! /bin/env Rscript
+
+#'
+#' 1. load a Seurat object
+#' 2. match cluster idents between the filtered selections and the Seurat
+#' 4. select specified clusters and get the cell ids that remain in the Seurat
+#' 5. save a vector of cell IDs _to keep_ overwriting the existing file
+#' 
+
+#+ load libraries
+library(Seurat)
+library(magrittr)
+library(tidyverse)
+
+getwd() %>% str_split('/') %>% unlist() %>% head(n=10) %>% str_c(collapse='/') %>% file.path(., 'scripts', 'seurat_processing', 'helper_functions.R') %>% source()
+
+packageVersion('Seurat') %>% sprintf(fmt='/// Seurat version: %s') %>% message()
+
+#+ collect_environment_variables
+input_seurat_rds <- Sys.getenv('INPUT_SEURAT_RDS')
+cluster_ids_variable <- Sys.getenv('SELECTED_CLUSTER_VARIABLE')
+cluster_ids_to_select <- Sys.getenv('SELECTED_CLUSTER_IDENTS')
+save_path <- Sys.getenv('SAVE_PATH')
+
+sprintf(fmt='/// input_seurat_rds: %s', input_seurat_rds) %>% message()
+sprintf(fmt='/// cluster_ids_variable: %s', cluster_ids_variable) %>% message()
+sprintf(fmt='/// cluster_ids_to_select: %s', cluster_ids_to_select) %>% message()
+sprintf(fmt='/// save_path: %s', save_path) %>% message()
+
+#+ general_setup
+dir.create(path=save_path, showWarnings=FALSE, recursive=TRUE)
+
+#+ load_seurat
+sprintf('/// Loading seurat: %s', input_seurat_rds) %>% message()
+seurat <- readRDS(file=input_seurat_rds)
+
+#+ read_the_contaminant_clusters_and_make_a_nested_list
+sprintf('/// Parsing clusters for: %s / %s', Project(seurat), save_path) %>% message()
+cluster_ids_to_select %<>%
+  str_split(pattern='-') %>%
+  unlist()
+
+cluster_ids_to_select %>%
+  str_c(collapse=', ') %>%
+  sprintf(fmt='/// Selected clusters: %s') %>%
+  message()
+
+#+ set_idents_to_same_as_selection
+Idents(object=seurat) <- cluster_ids_variable
+
+#+ select_specified_clusters
+seurat %<>%
+  subset(idents=cluster_ids_to_select, invert=FALSE) 
+
+#+ get_cell_ids_per_dataset_to_keep
+seurat@meta.data %>%
+  rownames_to_column(var='cell_id') %>%
+  dplyr::select(cell_id, orig.ident) %>%
+  mutate(cell_id=str_remove(cell_id, pattern='(_\\d+)+$')) %>%
+  plyr::dlply(~orig.ident, pluck, 'cell_id') -> cell_ids_to_keep
+
+#+ save_results
+for(orig_dataset in names(cell_ids_to_keep)) {
+  out_file <- file.path(save_path, sprintf('%s.rds', orig_dataset))
+  sprintf('/// Writing %s to %s', orig_dataset, out_file) %>% message()
+  saveRDS(object=cell_ids_to_keep[[orig_dataset]], file=out_file)
+}
+
+#+ finish
+Project(seurat) %>% sprintf(fmt='/// done %s') %>% message()
+

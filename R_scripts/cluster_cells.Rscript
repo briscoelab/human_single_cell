@@ -1,0 +1,110 @@
+#! /bin/env Rscript
+
+#'
+#' 1. load dimension reduced object
+#' 2. cluster cells
+#' 3. set default cluster identities to snn_res 1.0
+#' 4. iterate over all combinations of cluster id, cluster set and enrichment method
+#' 5. save objects
+#'
+
+#+ load libraries
+library(rslurm, lib.loc='/camp/stp/babs/working/barrinc/R/x86_64-pc-linux-gnu-library/3.5')
+library(doMC, lib.loc='~/R/x86_64-pc-linux-gnu-library/3.6')
+library(future)
+library(Seurat)
+library(magrittr)
+library(tidyverse)
+
+getwd() %>% str_split('/') %>% unlist() %>% head(n=10) %>% str_c(collapse='/') %>% file.path(., 'scripts', 'seurat_processing', 'helper_functions.R') %>% source()
+
+packageVersion('Seurat') %>% sprintf(fmt='/// Seurat version: %s') %>% message()
+
+#+ collect_environment_variables
+input_seurat_rds <- Sys.getenv('INPUT_SEURAT_RDS')
+resolutions <- Sys.getenv('RESOLUTIONS')
+nthreads <- Sys.getenv('NTHREADS') %>% as.numeric()
+save_seurat_path <- Sys.getenv('OUTPUT_SEURAT_PATH')
+save_results_path <- Sys.getenv('OUTPUT_FINDMARKERS_PATH') %T>% dir.create(showWarnings=FALSE, recursive=TRUE)
+provenance_name <- Sys.getenv(x='PROVENANCE_NAME', unset=get_script_step_name())
+
+#+ setup
+registerDoMC(nthreads)
+
+plan(multiprocess, workers=nthreads)
+options(future.globals.maxSize=20*1024^3) # change `future` max object size
+
+#+ load_seurat
+sprintf('/// Loading seurat: %s', input_seurat_rds) %>% message()
+seurat <- readRDS(file=input_seurat_rds)
+
+#+ split_resolutions
+sprintf('/// got resolutions: %s', input_seurat_rds) %>% message()
+resolutions %<>%
+  str_split(pattern=' ') %>%
+  unlist() %>%
+  as.numeric() %>%
+  print()
+
+#+ cluster_cells
+sprintf('/// clustering cells: %s', Project(seurat)) %>% message()
+for(reduction_name in 'pca') {
+  sprintf('/// reduction: %s', reduction_name) %>% message()
+
+  dims <- seurat@misc$n_dimensions
+  message('--- FindNeighbors')
+  seurat %<>% FindNeighbors(dims=seq(dims), reduction=reduction_name)
+  message('--- FindClusters')
+  seurat %<>% FindClusters(resolution=resolutions, random.seed=1, group.singletons=TRUE, verbose=FALSE)
+
+  message('--- update cluster idents')
+  use_ident <- sprintf(fmt='%s_snn_res.1', DefaultAssay(seurat))
+  seurat %<>% SetIdent(value=seurat@meta.data[[use_ident]]) # set @active.ident to a specific resolution
+  seurat$seurat_clusters <- Idents(object=seurat) # update `seurat_clusters` in the meta.data
+}
+
+#+ get_parameter_sets
+sprintf('/// getting FindMarkers parameter sets: %s', Project(seurat)) %>% message()
+seurat@meta.data %>%
+  select_at(vars(contains('_snn_res'))) %>%
+  gather(key=cluster_set, value=ident.1) %>%
+  unique() %>%
+  crossing(test.use=c('wilcox'), assay='RNA', slot='data', logfc.threshold=0.25, min.pct=0.8) -> all_params
+
+#+ filter_parameter_sets_so_only_clusters_with_min.cells.per.group_at_least_three_are_run
+sprintf('/// filtering FindMarkers parameter sets: %s', Project(seurat)) %>% message()
+seurat@meta.data %>%
+  select_at(vars(contains('_snn_res'))) %>%
+  gather(key='cluster_set', value='ident.1') %>%
+  group_by(cluster_set, ident.1) %>%
+  summarise(n_cells=n()) %>%
+  filter(n_cells>=3) %>%
+  inner_join(x=all_params, by=c('cluster_set','ident.1')) %>%
+  dplyr::select(-n_cells) -> all_params
+
+#+ run_findmarkers
+sprintf('/// Running FindMarkers: %s', Project(seurat)) %>% message()
+sprintf('/// parameter combinations for %s: %s', Project(seurat), nrow(all_params)) %>% message()
+all_params %>%
+  plyr::adply(.margins=1, .parallel=TRUE, function(x) {
+    x %<>% as.list()
+
+    Idents(seurat) <- x$cluster_set
+    params <- append(list(object=seurat, verbose=FALSE, only.pos=TRUE), x[!names(x)=='cluster_set'])
+    do.call(what=FindMarkers, args=params) %>% rownames_to_column('feature')}) %>%
+  plyr::dlply(~test.use, function(x) select_if(x, function(v) !all(is.na(v)))) -> results
+
+#+ save_results_in_seurat
+seurat@misc$FindMarkersResults <- results
+seurat@misc$FindMarkersParams <- all_params
+
+#+ save_results
+sprintf('/// Saving results to %s: %s', save_results_path, Project(seurat)) %>% message()
+file.path(save_results_path, str_c(Project(seurat), '.rds')) %>%
+  saveRDS(object=results)
+
+#+ save_seurat
+save_seurat(seurat=seurat, save_path=save_seurat_path, script_name=provenance_name)
+
+#+ finish
+sprintf('/// done %s', seurat@project.name) %>% message()

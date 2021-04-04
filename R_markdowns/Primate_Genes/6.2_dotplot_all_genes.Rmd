@@ -1,0 +1,148 @@
+---
+title: "6.2_all_genes_dotplot"
+output: html_notebook
+---
+```{r}
+.libPaths(c("/camp/lab/briscoej/working/Rory/.conda/my_envs/r_lab/lib/R/library",
+          "/camp/lab/briscoej/working/Rory/R_packages",
+          "/camp/home/maizelr/R/x86_64-pc-linux-gnu-library/3.6",
+          "/camp/apps/eb/software/R/3.6.2-foss-2019b/lib64/R/library"))
+```
+
+
+```{r}
+# load libraries
+library(sctree);
+library(Seurat);
+library(ggplot2);
+library(cowplot);
+library(patchwork);
+library(plyr);
+library(dplyr);
+library(data.table);
+library(RColorBrewer);
+library(grDevices);
+```
+
+```{r}
+step1_types <- list()
+
+list(`CNS Progenitor` ='Progenitor',
+     `CNS Neuron`     ='Neuron',
+     `PNS Progenitor` =c('DRG progenitor', 'Neural crest progenitor', 'Sensory neuron progenitor'),
+     `PNS Neuron`     ='Peripheral neuron',
+     `Mesoderm`       =c('Mesoderm I', 'Mesoderm II', 'Mesoderm III', 'Mesoderm IV', 'Mesoderm V', 'Mesoderm VI', 'Myoblast'),
+     `Skin`           ='Skin',
+     `Hematopoietic Cells`  =c('Blood', 'Hematopoeitic', 'Erythropoeitic', 'Erythrocytes', 'Erythrocytes II'),
+     `Other`          ='NULL') -> step1_types$labels
+
+
+palettes <- list()
+palettes$paired <- RColorBrewer::brewer.pal(name='Paired', n=12)
+palettes$dark2 <- RColorBrewer::brewer.pal(name='Dark2', n=8)
+palettes$set1 <- RColorBrewer::brewer.pal(name='Set1', n=9)
+palettes$set3 <- RColorBrewer::brewer.pal(name='Set3', n=12)
+palettes$accent <- RColorBrewer::brewer.pal(name='Accent', n=12)
+palettes$brbg <- RColorBrewer::brewer.pal(name='BrBG', n=11)
+
+c(`CNS Progenitors`=palettes$dark2[1],
+  `CNS Neurons`    =palettes$dark2[2],
+  `PNS Progenitors`=palettes$dark2[3],
+  `PNS Neurons`    =palettes$dark2[4],
+  `Mesoderm`      =palettes$brbg[4],
+  `Skin`          =palettes$brbg[3],
+  `Hematopoietic Cells`         =palettes$brbg[2],
+  `Other`         =palettes$set3[9]) -> step1_types$colours
+```
+
+```{r}
+human <- readRDS('../../seurat_objects/human_celltyped.rds')
+```
+
+```{r}
+CNS_prog <- c("Progenitor","Oligodendrocyte")
+CNS_neur <- c("Neuron")
+Mesoderm <- c("Mesoderm III","Mesoderm II","Mesoderm I","Mesoderm IV","Mesoderm V","Mesoderm VI","Myoblast")
+DRG_prog <- c('Neural crest progenitor', 'DRG Progenitor',"Sensory neuron progenitor")
+Per_neur <- c("Peripheral neuron")
+Hematopo <- c("Hematopoeitic","Erythropoeitic","Erythrocytes","Erythrocytes II","Blood")
+skincell <- c("Skin")
+other <- c("NULL","Erythropoeitic","Erythrocytes","Erythrocytes II","Myoblast","Blood")
+```
+
+```{r}
+cell_type <- rep("NA",dim(human@meta.data)[1])
+sum(cell_type=='NA')
+cell_type[which(human$Type_step1 %in% CNS_prog)] <- 'CNS Progenitors'
+cell_type[which(human$Type_step1 %in% CNS_neur)] <- 'CNS Neurons'
+cell_type[which(human$Type_step1 %in% Mesoderm)] <- 'Mesoderm'
+cell_type[which(human$Type_step1 %in% DRG_prog)] <- 'PNS Progenitors'
+cell_type[which(human$Type_step1 %in% Per_neur)] <- 'PNS Neurons'
+cell_type[which(human$Type_step1 %in% Hematopo)] <- 'Hematopoietic Cells'
+cell_type[which(human$Type_step1 %in% skincell)] <- 'Skin'
+cell_type[which(human$Type_step1 %in% other)] <- 'Other'
+sum(cell_type=='NA')
+
+```
+
+```{r}
+pgs <- read.csv('primate_genes.txt', sep='\n', stringsAsFactors = FALSE)
+p_genes <- pgs$GENE
+```
+
+```{r}
+DefaultAssay(human) <- 'SCT'
+exdata <- as.data.frame(human, genes = p_genes)
+identity <- Idents(human)
+exdata$Cell <- rownames(exdata)
+exdata$Type <- cell_type
+#names(exdata) <- gsub('.','-',names(exdata), fixed = TRUE)
+exdata <- reshape2::melt(exdata, id.vars = c("Cell","Type"), measure.vars = p_genes,
+                         variable.name = "Gene", value.name = "Expression")
+
+exdata %>%
+  group_by(Type, Gene) %>%
+  summarise(mean_value=mean(Expression)) %>%
+  group_by(Gene) %>%
+  mutate(mean_value_scaled=mean_value/max(mean_value)) -> exdata
+```
+
+```{r}
+cols <- c("#1B9E77","#D95F02","#E7298A","#DFC27D","#7570B3","#8C510A","#BF812D","#D9D9D9")
+
+cols <- c("#D95F02","#1B9E77","#BF812D","#7570B3","#D9D9D9","#DFC27D","#E7298A","#8C510A")
+
+library(purrr)
+mv <- (aggregate(x = exdata[exdata$Type!='Other',]$mean_value,
+          by = list(exdata[exdata$Type!='Other',]$Gene),
+          FUN = max)) %>% map_df(rev)
+
+xcols <-  if_else(mv$x>0.1, 'red','black')
+
+
+ggplot(data=exdata) +
+      aes(x=Gene, y=factor(Type, levels=(c("CNS Progenitors","CNS Neurons","Mesoderm","PNS Progenitors",
+                                              "PNS Neurons", "Hematopoietic Cells", "Skin", "Other"))), size=mean_value, fill=Type) +
+      geom_point(shape=21, stroke=0.6) +
+      scale_x_discrete(position='bottom') +
+      scale_size_area(max_size=3) + 
+      guides(fill='none', size=guide_legend()) +
+      theme(axis.text.x=element_text(angle=45, hjust=1, vjust=1, size=rel(0.7)),
+            axis.text.y=element_text(angle=0, hjust=1, vjust=1, size=rel(0.5), colour = rev(xcols)),
+            axis.title.x=element_blank(),
+            aspect.ratio = 3,
+            panel.grid.major.x=element_line(),
+            plot.title = element_text(size = 7)) + 
+      scale_fill_manual(values=cols) +
+      labs(x='Gene', y='Cell Type', fill='Cell Type', size='Mean\nExpression') + 
+      ggtitle('Primate Specific Gene Expression Across Cell Types') + 
+      coord_flip()
+# 
+ggsave('../plots/6_ALL_GENES_DOTPLOT.pdf')
+```
+
+
+
+
+
+

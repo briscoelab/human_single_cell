@@ -1,0 +1,315 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+.libPaths(c("/camp/lab/briscoej/working/Rory/.conda/my_envs/r_lab/lib/R/library",
+          "/camp/lab/briscoej/working/Rory/R_packages",
+          "/camp/home/maizelr/R/x86_64-pc-linux-gnu-library/3.6",
+          "/camp/apps/eb/software/R/3.6.2-foss-2019b/lib64/R/library"))
+```
+
+
+```{r}
+# load libraries
+library(sctree);
+library(Seurat);
+library(ggplot2);
+library(cowplot);
+library(patchwork);
+library(plyr);
+library(dplyr);
+library(data.table);
+library(RColorBrewer);
+library(grDevices);
+```
+
+
+
+```{r}
+human <- readRDS('../../seurat_objects/human_celltyped.rds')
+mouse <- readRDS('../../seurat_objects/mouse_celltyped.rds')
+```
+
+```{r}
+h_prog <- human[,(human$Type_step1=='Progenitor' | human$Type_step1=='Oligodendrocyte')]
+m_prog <- mouse[,(mouse$Type_step1=='Progenitor' | mouse$Type_step1=='Oligodendrocyte')]
+```
+
+```{r}
+sum(human$Type_step1=="Oligodendrocyte")
+```
+
+```{r}
+h_tps <- unique(h_prog@meta.data$orig.timepoint)
+m_tps <- unique(m_prog@meta.data$orig.timepoint)
+
+process_dataset <- function(data, gene_names){
+  # subset only relevant cells, based on Olig2 and Nkx2-2
+  o.exp = GetAssayData(object = data, assay = "RNA", slot = "data")[gene_names[1],]
+  n.exp = GetAssayData(object = data, assay = "RNA", slot = "data")[gene_names[2],]
+  pos_cells <- names(which(o.exp>0 | n.exp>0))
+  subsetted_cells <- subset(data,cells=pos_cells)
+  
+  #classify each cell based on marker expression
+  so.exp = GetAssayData(object = subsetted_cells, assay = "RNA", slot = "data")[gene_names[1],]
+  sn.exp = GetAssayData(object = subsetted_cells, assay = "RNA", slot = "data")[gene_names[2],]
+  olig <- which(so.exp>0 & sn.exp==0)
+  nkx2 <- which(so.exp==0 & sn.exp>0)
+  both <- which(so.exp>0 & sn.exp>0)
+  
+  # add ID info
+  cell_ids <- rep(0,dim(subsetted_cells@meta.data)[1])
+  cell_ids[olig] <- 'Olig2+'
+  cell_ids[nkx2] <- 'Nkx2-2+'
+  cell_ids[both] <- 'Olig2+/Nkx2-2+'
+  subsetted_cells@meta.data['expression_type'] <- cell_ids
+  return(subsetted_cells)
+}
+
+h.data <- process_dataset(h_prog, gene_names = c('OLIG2','NKX2-2'))
+m.data <- process_dataset(m_prog, gene_names = c('Olig2','Nkx2-2'))
+```
+
+
+```{r}
+h_feats <- c('SOX2','PHOX2B','ISL1','TBX1','TBX3','TBX5','TBX10','TBX15','TBX18','TBX20','TBX22')
+DefaultAssay(h.data) <- 'RNA'
+Idents(h.data) <- 'expression_type'
+exdata <- as.data.frame(h.data, genes = h_feats)
+identity <- Idents(h.data)
+exdata$Cell <- rownames(exdata)
+exdata$Idents <- identity
+exdata$Timepoint <- h.data$orig.timepoint
+names(exdata) <- gsub('.','-',names(exdata), fixed = TRUE)
+exdata <- reshape2::melt(exdata, id.vars = c("Cell","Idents","Timepoint"), measure.vars = h_feats,
+                         variable.name = "Feat", value.name = "Expr")
+
+c <- ggplot(exdata, aes(factor(Feat), Expr)) +
+        geom_jitter(position = position_jitter(0.1), alpha=0.25, 
+                    aes(colour=Timepoint), size=.75) + scale_color_manual(values=rev(brewer.pal(4, 'Spectral'))) +
+        geom_violin(scale = "width", adjust = 1, trim = TRUE, alpha=0.25) +
+        scale_y_continuous(expand = c(0, 0), position="right", labels = function(x)
+                           c(rep(x = "", times = length(x)-2), x[length(x) - 1], "")) +
+        facet_grid(rows = vars(Idents), scales = "free", switch = "y") +
+        theme_cowplot(font_size = 12) +
+        theme(panel.spacing = unit(0, "lines"),
+              panel.background = element_rect(fill = NA, color = "black"),
+              strip.background = element_blank(),
+              strip.text = element_text(face = "bold"),
+              strip.text.y.left = element_text(angle = 0),
+              axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+        ggtitle("Human: Visceral Marker Expression") + xlab("Gene") + ylab("Expression Level") +
+        guides(colour = guide_legend(override.aes = list(alpha = 1)))
+
+c
+
+# ggsave("../plots/4_DP_cells_HUMAN_VIOLIN_TIMEPOINT.pdf")
+```
+
+```{r}
+m_feats <- tools::toTitleCase(tolower(h_feats))
+
+color_ID <- rep('Single Positive Cells',dim(m.data@meta.data)[1])
+
+for (t in m_tps){
+  color_ID[which(m.data@meta.data$orig.timepoint==t)] = gsub('5','.5',tolower(t))
+}
+
+m.data@meta.data['UMAP_color'] = color_ID 
+
+
+DefaultAssay(m.data) <- 'RNA'
+Idents(m.data) <- 'expression_type'
+exdata <- as.data.frame(m.data, genes = m_feats)
+identity <- Idents(m.data)
+exdata$Cell <- rownames(exdata)
+exdata$Idents <- identity
+exdata$Timepoint <- m.data$UMAP_color
+# names(exdata) <- gsub('.','-',names(exdata), fixed = TRUE)
+exdata <- reshape2::melt(exdata, id.vars = c("Cell","Idents","Timepoint"), measure.vars = m_feats,
+                         variable.name = "Feat", value.name = "Expr")
+
+c <- ggplot(exdata, aes(factor(Feat), Expr)) +
+        geom_jitter(position = position_jitter(0.1), alpha=0.25, 
+                    aes(colour=Timepoint), size=.75) + scale_color_manual(breaks=(c('e8.5','e9.5','e10.5','e11.5','e12.5','e13.5')),
+                                                                          values=rev(brewer.pal(6, 'Spectral'))) +
+        geom_violin(scale = "width", adjust = 1, trim = TRUE, alpha=0.25) +
+        scale_y_continuous(expand = c(0, 0), position="right", labels = function(x)
+                           c(rep(x = "", times = length(x)-2), x[length(x) - 1], "")) +
+        facet_grid(rows = vars(Idents), scales = "free", switch = "y") +
+        theme_cowplot(font_size = 12) +
+        theme(panel.spacing = unit(0, "lines"),
+              panel.background = element_rect(fill = NA, color = "black"),
+              strip.background = element_blank(),
+              strip.text = element_text(face = "bold"),
+              strip.text.y.left = element_text(angle = 0),
+              axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+        ggtitle("Mouse: Visceral Marker Expression") + xlab("Gene") + ylab("Expression Level") +
+        guides(colour = guide_legend(override.aes = list(alpha = 1)))
+
+c
+```
+
+
+```{r}
+h_neur <- human[,(human$Type_step1=='Neuron')]
+
+
+
+
+m_neur <- mouse[,(mouse$Type_step1=='Neuron')]
+```
+
+
+
+```{r}
+phexp = GetAssayData(object = h_neur, assay = "RNA", slot = "data")["PHOX2B",]
+h_phox <- h_neur[,which(phexp>0)]
+h_phox <- h_phox[,h_phox$orig.tissue!='thoracic']
+
+phexp = GetAssayData(object = m_neur, assay = "RNA", slot = "data")["Phox2b",]
+m_phox <- m_neur[,which(phexp>0)]
+
+h_phox
+m_phox
+```
+
+
+```{r}
+h_feats <- c('PHOX2B','ISL1','TBX1',"TBX2",'TBX3','TBX5','TBX10','TBX15','TBX18','TBX20','TBX22')
+DefaultAssay(h_phox) <- 'RNA'
+Idents(h_phox) <- 'expression_type'
+exdata <- as.data.frame(h_phox, genes = h_feats)
+identity <- Idents(h_phox)
+exdata$Cell <- rownames(exdata)
+exdata$Idents <- identity
+exdata$Timepoint <- h_phox$orig.timepoint
+names(exdata) <- gsub('.','-',names(exdata), fixed = TRUE)
+exdata <- reshape2::melt(exdata, id.vars = c("Cell","Idents","Timepoint"), measure.vars = h_feats,
+                         variable.name = "Feat", value.name = "Expr")
+
+c <- ggplot(exdata, aes(factor(Feat), Expr)) +
+        geom_jitter(position = position_jitter(0.1), alpha=0.75, 
+                    aes(colour=Timepoint), size=.75) + scale_color_manual(values=rev(brewer.pal(4, 'Spectral'))) +
+        geom_violin(scale = "width", adjust = 1, trim = TRUE, alpha=0.25) +
+        scale_y_continuous(expand = c(0, 0), position="right", labels = function(x)
+                           c(rep(x = "", times = length(x)-2), x[length(x) - 1], "")) +
+        # facet_grid(rows = vars(Idents), scales = "free", switch = "y") +
+        theme_cowplot(font_size = 12) +
+        theme(panel.spacing = unit(0, "lines"),
+              panel.background = element_rect(fill = NA, color = "black"),
+              strip.background = element_blank(),
+              strip.text = element_text(face = "bold"),
+              strip.text.y.left = element_text(angle = 0),
+              axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+        ggtitle("Human: Visceral Marker Expression in PHOX2B+ Cells") + xlab("Gene") + ylab("Expression Level") +
+        guides(colour = guide_legend(override.aes = list(alpha = 1)))
+
+c
+
+ggsave('../plots/9_human_phox2b_violin.pdf')
+```
+
+
+```{r}
+m_feats <- tools::toTitleCase(tolower(h_feats))
+
+color_ID <- rep('NA',dim(m_phox@meta.data)[1])
+
+for (t in m_tps){
+  color_ID[which(m_phox@meta.data$orig.timepoint==t)] = gsub('5','.5',tolower(t))
+}
+
+m_phox@meta.data['UMAP_color'] = color_ID 
+
+
+DefaultAssay(m_phox) <- 'RNA'
+Idents(m_phox) <- 'expression_type'
+exdata <- as.data.frame(m_phox, genes = m_feats)
+identity <- Idents(m_phox)
+exdata$Cell <- rownames(exdata)
+exdata$Idents <- identity
+exdata$Timepoint <- m_phox$UMAP_color
+# names(exdata) <- gsub('.','-',names(exdata), fixed = TRUE)
+exdata <- reshape2::melt(exdata, id.vars = c("Cell","Idents","Timepoint"), measure.vars = m_feats,
+                         variable.name = "Feat", value.name = "Expr")
+
+c <- ggplot(exdata, aes(factor(Feat), Expr)) +
+        geom_jitter(position = position_jitter(0.1), alpha=0.85, 
+                    aes(colour=Timepoint), size=.75) + scale_color_manual(breaks=(c('e8.5','e9.5','e10.5','e11.5','e12.5','e13.5')),
+                                                                          values=rev(brewer.pal(6, 'Spectral'))) +
+        geom_violin(scale = "width", adjust = 1, trim = TRUE, alpha=0.25) +
+        scale_y_continuous(expand = c(0, 0), position="right", labels = function(x)
+                           c(rep(x = "", times = length(x)-2), x[length(x) - 1], "")) +
+        # facet_grid(rows = vars(Idents), scales = "free", switch = "y") +
+        theme_cowplot(font_size = 12) +
+        theme(panel.spacing = unit(0, "lines"),
+              panel.background = element_rect(fill = NA, color = "black"),
+              strip.background = element_blank(),
+              strip.text = element_text(face = "bold"),
+              strip.text.y.left = element_text(angle = 0),
+              axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+        ggtitle("Mouse: Visceral Marker Expression in Phox2b+ Cells") + xlab("Gene") + ylab("Expression Level") +
+        guides(colour = guide_legend(override.aes = list(alpha = 1)))
+
+c
+
+ggsave('../plots/9_mouse_phox2b_violin.pdf')
+```
+
+
+
+
+```{r}
+DefaultAssay(h_phox) <- 'RNA'
+Idents(h_phox) <- 'Type_step2'
+exdata <- as.data.frame(h_phox, genes = c('PHOX2B','TBX20'))
+identity <- Idents(h_phox)
+exdata$Cell <- rownames(exdata)
+exdata$Idents <- identity
+exdata$Timepoint <- h_phox$orig.timepoint
+#names(exdata) <- gsub('.','-',names(exdata), fixed = TRUE)
+# exdata <- reshape2::melt(exdata, id.vars = c("Cell","Idents","Tissue"), measure.vars = c('HOXC6','HOXC9'),
+#                          variable.name = "Feat", value.name = "Expr")
+c1 <- ggplot(exdata, aes(x=PHOX2B, y=TBX20, color=Timepoint)) + geom_point(alpha=0.8) + ggtitle('Human') +         
+  theme(panel.spacing = unit(0, "lines"),
+              panel.background = element_rect(fill = NA, color = "black"),
+              strip.background = element_blank()) + theme(legend.position="bottom",legend.text = element_text(size=5)) +
+              scale_color_manual(values=rev(brewer.pal(4, 'Spectral'))) 
+              # scale_color_manual(breaks=(c('e8.5','e9.5','e10.5','e11.5','e12.5','e13.5')), values=rev(brewer.pal(6, 'Spectral')))
+
+c1
+```
+
+```{r}
+DefaultAssay(m_phox) <- 'RNA'
+Idents(m_phox) <- 'Type_step2'
+exdata <- as.data.frame(m_phox, genes = c('Phox2b','Tbx20'))
+identity <- Idents(m_phox)
+exdata$Cell <- rownames(exdata)
+exdata$Idents <- identity
+exdata$Timepoint <- m_phox$UMAP_color
+#names(exdata) <- gsub('.','-',names(exdata), fixed = TRUE)
+# exdata <- reshape2::melt(exdata, id.vars = c("Cell","Idents","Tissue"), measure.vars = c('HOXC6','HOXC9'),
+#                          variable.name = "Feat", value.name = "Expr")
+c2 <- ggplot(exdata, aes(x=Phox2b, y=Tbx20, color=Timepoint)) + geom_point(alpha=0.8) + ggtitle('Mouse') +         
+  theme(panel.spacing = unit(0, "lines"),
+              panel.background = element_rect(fill = NA, color = "black"),
+              strip.background = element_blank()) + theme(legend.position="bottom",legend.text = element_text(size=5)) +
+              scale_color_manual(breaks=(c('e8.5','e9.5','e10.5','e11.5','e12.5','e13.5')), values=rev(brewer.pal(6, 'Spectral')))
+
+c2
+```
+
+
+
+```{r}
+c1 + c2
+
+ggsave('../plots/9_phox2b_tbx20_scatter.pdf')
+```
+
+

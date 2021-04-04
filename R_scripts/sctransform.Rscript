@@ -1,0 +1,38 @@
+#! /bin/env Rscript
+
+#'
+#' 1. load Seurat
+#' 2. normalise using SCTransform and remove cell cycle effects
+#' 3. save object
+#'
+
+#+ load libraries
+library(Seurat)
+library(magrittr)
+library(tidyverse)
+
+getwd() %>% str_split('/') %>% unlist() %>% head(n=10) %>% str_c(collapse='/') %>% file.path(., 'scripts', 'seurat_processing', 'helper_functions.R') %>% source()
+
+packageVersion('Seurat') %>% sprintf(fmt='/// Seurat version: %s') %>% message()
+
+#+ collect_environment_variables
+input_seurat_rds <- Sys.getenv('INPUT_SEURAT_RDS')
+save_path <- Sys.getenv('OUTPUT_PATH')
+provenance_name <- Sys.getenv(x='PROVENANCE_NAME', unset=get_script_step_name())
+
+#+ load_seurat
+sprintf('/// Loading seurat: %s', input_seurat_rds) %>% message()
+seurat <- readRDS(file=input_seurat_rds)
+
+#+ normalise_dataset
+sprintf('/// SCTransforming: %s', Project(seurat)) %>% message()
+seurat %<>% SCTransform(assay='RNA', new.assay.name='SCT', seed.use=1,
+                        variable.features.n=3000, vars.to.regress='CC.Difference',
+                        do.scale=FALSE, do.center=TRUE,
+                        verbose=TRUE)
+
+#+ save_seurat
+save_seurat(seurat=seurat, save_path=save_path, script_name=provenance_name)
+
+#+ finish
+sprintf('/// done %s', seurat@project.name) %>% message()

@@ -1,0 +1,348 @@
+---
+title: "4.4 proportions through time"
+output: html_notebook
+---
+
+```{r}
+.libPaths(c("/camp/lab/briscoej/working/Rory/.conda/my_envs/r_lab/lib/R/library",
+          "/camp/lab/briscoej/working/Rory/R_packages",
+          "/camp/home/maizelr/R/x86_64-pc-linux-gnu-library/3.6",
+          "/camp/apps/eb/software/R/3.6.2-foss-2019b/lib64/R/library"))
+```
+
+
+```{r}
+# load libraries
+library(sctree);
+library(Seurat);
+library(ggplot2);
+library(cowplot);
+library(patchwork);
+library(plyr);
+library(dplyr);
+library(data.table);
+library(RColorBrewer);
+library(grDevices);
+```
+
+```{r}
+human <- readRDS('../../seurat_objects/human_celltyped.rds')
+mouse <- readRDS('../../seurat_objects/mouse_celltyped.rds')
+```
+
+```{r}
+h_prog <- human[,(human$Type_step1=='Progenitor' | human$Type_step1=='Oligodendrocyte')]
+m_prog <- mouse[,(mouse$Type_step1=='Progenitor' | mouse$Type_step1=='Oligodendrocyte')]
+```
+
+
+```{r}
+h_tps <- unique(h_prog@meta.data$orig.timepoint)
+m_tps <- unique(m_prog@meta.data$orig.timepoint)
+
+process_dataset <- function(data, gene_names){
+  # subset only relevant cells, based on Olig2 and Nkx2-2
+  o.exp = GetAssayData(object = data, assay = "RNA", slot = "data")[gene_names[1],]
+  n.exp = GetAssayData(object = data, assay = "RNA", slot = "data")[gene_names[2],]
+  pos_cells <- names(which(o.exp>0 | n.exp>0))
+  subsetted_cells <- subset(data,cells=pos_cells)
+  
+  #classify each cell based on marker expression
+  so.exp = GetAssayData(object = subsetted_cells, assay = "RNA", slot = "data")[gene_names[1],]
+  sn.exp = GetAssayData(object = subsetted_cells, assay = "RNA", slot = "data")[gene_names[2],]
+  olig <- which(so.exp>0 & sn.exp==0)
+  nkx2 <- which(so.exp==0 & sn.exp>0)
+  both <- which(so.exp>0 & sn.exp>0)
+  
+  # add ID info
+  cell_ids <- rep(0,dim(subsetted_cells@meta.data)[1])
+  cell_ids[olig] <- 'Olig2+'
+  cell_ids[nkx2] <- 'Nkx2-2+'
+  cell_ids[both] <- 'Olig2+/Nkx2-2+'
+  subsetted_cells@meta.data['expression_type'] <- cell_ids
+  
+  # for SCT slot, we want to select highly variable genes for this relevant population
+  subsetted_cells <- FindVariableFeatures(subsetted_cells, nfeatures = 5000, assay = 'SCT');
+  
+  DefaultAssay(subsetted_cells) <- 'SCT'
+  all.genes <- rownames(subsetted_cells)
+  subsetted_cells <- ScaleData(subsetted_cells, features = all.genes);
+  
+  # rerun PCA & UMAP. Do for integrated, as this plots nicer, though SCT can be used for analysis since integrated doesn't contain the genes we care about.
+  subsetted_cells <- RunPCA(subsetted_cells, assay = 'integrated', npcs = 50, verbose = FALSE, reduction.name='sct_pca');
+  subsetted_cells <- RunUMAP(subsetted_cells, assay = 'integrated', reduction = "sct_pca", dims = 1:20, reduction.name='sct_umap', verbose = FALSE);
+  
+  return(subsetted_cells)
+}
+
+h.data <- process_dataset(h_prog, gene_names = c('OLIG2','NKX2-2'))
+m.data <- process_dataset(m_prog, gene_names = c('Olig2','Nkx2-2'))
+```
+
+
+```{r}
+
+t_o2 <- c()
+t_dp <- c()
+t_n2 <- c()
+t_tot <- c()
+t_ndp <- c()
+t_no2 <- c()
+t_nn2 <- c()
+
+for (t in m_tps){
+  tp_data <- m.data[,m.data@meta.data$orig.timepoint==t]
+  tot <- length(tp_data@meta.data['expression_type']$expression_type)
+  o2 <- round(sum(tp_data@meta.data['expression_type']=='Olig2+')/tot,3)
+  n2 <- round(sum(tp_data@meta.data['expression_type']=='Nkx2-2+')/tot,3)
+  dp <- round(sum(tp_data@meta.data['expression_type']=='Olig2+/Nkx2-2+')/tot,3)
+  ndp <- sum(tp_data@meta.data['expression_type']=='Olig2+/Nkx2-2+')
+  no2 <- sum(tp_data@meta.data['expression_type']=='Olig2+')
+  nn2 <- sum(tp_data@meta.data['expression_type']=='Nkx2-2+')
+
+  t_o2 <- c(t_o2, o2)
+  t_n2 <- c(t_n2, n2)
+  t_dp <- c(t_dp, dp)
+  t_tot <- c(t_tot, tot)
+  t_ndp <- c(t_ndp, ndp)
+  t_no2 <- c(t_no2, no2)
+  t_nn2 <- c(t_nn2, nn2)
+}
+
+m.frac_df <- data.frame('Mouse_Timepoint'=m_tps, 
+                        'Double_Positive_Cells'=t_dp,  
+                        'Olig2_Cells'=t_o2, 
+                        'Nkx2-2_Cells'=t_n2,
+                        'Number_DP'=t_ndp,
+                        'Number_Olig2'=t_no2,
+                        'Number_Nkx2-2'=t_nn2,
+                        'Total_Number'=t_tot)
+m.frac_df
+
+t_o2 <- c()
+t_dp <- c()
+t_n2 <- c()
+t_tot <- c()
+t_ndp <- c()
+t_no2 <- c()
+t_nn2 <- c()
+
+for (t in h_tps){
+  tp_data <- h.data[,h.data@meta.data$orig.timepoint==t]
+  tot <- length(tp_data@meta.data['expression_type']$expression_type)
+  o2 <- round(sum(tp_data@meta.data['expression_type']=='Olig2+')/tot,3)
+  n2 <- round(sum(tp_data@meta.data['expression_type']=='Nkx2-2+')/tot,3)
+  dp <- round(sum(tp_data@meta.data['expression_type']=='Olig2+/Nkx2-2+')/tot,3)
+  ndp <- sum(tp_data@meta.data['expression_type']=='Olig2+/Nkx2-2+')
+  no2 <- sum(tp_data@meta.data['expression_type']=='Olig2+')
+  nn2 <- sum(tp_data@meta.data['expression_type']=='Nkx2-2+')
+  
+  t_o2 <- c(t_o2, o2)
+  t_n2 <- c(t_n2, n2)
+  t_dp <- c(t_dp, dp)
+  t_tot <- c(t_tot, tot)
+  t_ndp <- c(t_ndp, ndp)
+  t_no2 <- c(t_no2, no2)
+  t_nn2 <- c(t_nn2, nn2)
+  
+}
+
+h.frac_df <- data.frame('Human_Timepoint'=h_tps, 
+                        'Double_Positive_Cells'=t_dp,  
+                        'Olig2_Cells'=t_o2, 
+                        'Nkx2-2_Cells'=t_n2,
+                        'Number_DP'=t_ndp,
+                        'Number_Olig2'=t_no2,
+                        'Number_Nkx2-2'=t_nn2,                        
+                        'Total_Number'=t_tot)
+h.frac_df
+
+```
+
+```{r}
+h.melted <- melt(h.frac_df[,c('Human_Timepoint','Double_Positive_Cells','Olig2_Cells','Nkx2.2_Cells')])
+m.melted <- melt(m.frac_df[,c('Mouse_Timepoint','Double_Positive_Cells','Olig2_Cells','Nkx2.2_Cells')])
+
+fix <- c()
+for (tp in m.melted$Mouse_Timepoint){
+  fix <- c(fix, gsub('5','.5',tolower(tp)))
+}
+m.melted['Mouse_Timepoint']=fix
+
+m.melted$Mouse_Timepoint <- factor(m.melted$Mouse_Timepoint,                                    # Change ordering manually
+                                   levels = c("e8.5", "e9.5", "e10.5", "e11.5", "e12.5", "e13.5"))
+
+
+vfix <- c()
+for (vr in m.melted$variable){
+  vfix <- c(vfix, gsub('_',' ',vr))
+}
+
+m.melted['variable'] = vfix
+
+
+vfix <- c()
+for (vr in h.melted$variable){
+  vfix <- c(vfix, gsub('_',' ',vr))
+}
+
+h.melted['variable'] = vfix
+
+
+```
+
+
+```{r}
+p1 <- ggplot(h.melted, aes(x = Human_Timepoint, y = value, fill = variable)) +
+  geom_col() + ylab('Proportion of Population') + labs(fill = "Cell Type") + ggtitle('Human Cell Type Proportions') +
+  xlab("Timepoints") + scale_y_continuous(breaks=seq(0,1,0.1)) +
+  theme(panel.spacing = unit(0, "lines"),
+              panel.background = element_rect(fill = NA, color = "black"),
+              strip.background = element_blank()) + 
+  scale_fill_manual(values=c('salmon',"#85CD94","#8588BE"))
+
+p1
+
+ggsave('../plots/4_DP_cells_HUMAN_PROPORTIONS.pdf')
+```
+
+```{r}
+p2 <- ggplot(m.melted, aes(x = Mouse_Timepoint, y = value, fill = variable)) +
+  geom_col() + ylab('Proportion of Population') + labs(fill = "Cell Type") + ggtitle('Mouse Cell Type Proportions') +
+  xlab('Timepoints') + scale_y_continuous(breaks=seq(0,1,0.1)) +
+  theme(panel.spacing = unit(0, "lines"),
+              panel.background = element_rect(fill = NA, color = "black"),
+              strip.background = element_blank()) +
+  scale_fill_manual(values=c('salmon',"#85CD94","#8588BE"))
+p2
+
+ggsave('../plots/4_DP_cells_MOUSE_PROPORTIONS.pdf')
+```
+
+
+```{r}
+hf <- h.frac_df[,c('Double_Positive_Cells','Olig2_Cells','Nkx2.2_Cells')]
+hf$Timepoint <- c('CS12/e9.5','CS14/e10.5','CS17/e11.5','CS19/e13.5')
+hf$Species <- rep('Human', 4)
+hf <- rbind(hf, c(0.0,0.0,0.0,'CS18/e12.5','Human'))
+```
+
+
+
+
+
+
+```{r}
+mf <- m.frac_df[,c('Mouse_Timepoint','Double_Positive_Cells','Olig2_Cells','Nkx2.2_Cells')]
+mf <- mf[mf$Mouse_Timepoint!='E85',]
+mf <- mf[,c('Double_Positive_Cells','Olig2_Cells','Nkx2.2_Cells')]
+mf$Timepoint <- c('CS12/e9.5','CS14/e10.5','CS17/e11.5','CS18/e12.5','CS19/e13.5')
+mf$Species <- rep('Mouse', 5)
+```
+
+```{r}
+bf <- rbind(hf,mf)
+bf$Double_Positive_Cells=as.numeric((bf$Double_Positive_Cells))
+
+
+bf$Timepoint <- factor(bf$Timepoint,levels = c("CS12/e9.5", "CS14/e10.5", "CS17/e11.5", 'CS18/e12.5',"CS19/e13.5"))
+```
+
+```{r}
+p2 <- ggplot(bf, aes(x = Timepoint, y = Double_Positive_Cells,  fill = Species, position = Species)) +
+  geom_col(position = position_dodge()) + ylab('Proportion of Olig2+/Nkx2-2+ Population') + labs(fill = "Species") + ggtitle('Species Comparison of DP Proportions') +
+  xlab('Timepoints') + scale_y_continuous() + 
+  theme(panel.spacing = unit(0, "lines"),
+              panel.background = element_rect(fill = NA, color = "black"),
+              strip.background = element_blank())
+p2
+
+#ggsave('../plots/4_DP_cells_SPECIES_COMPARISON_BAR.pdf')
+```
+
+
+```{r}
+t_o2 <- c()
+t_dp <- c()
+t_n2 <- c()
+t_tot <- c()
+t_ndp <- c()
+t_no2 <- c()
+t_nn2 <- c()
+
+for (t in m_tps){
+  tp_data <- m.data[,m.data@meta.data$orig.timepoint==t]
+  tot <- length(tp_data@meta.data['expression_type']$expression_type)
+  o2 <- round(sum(tp_data@meta.data['expression_type']=='Olig2+')/tot,3)
+  n2 <- round(sum(tp_data@meta.data['expression_type']=='Nkx2-2+')/tot,3)
+  dp <- round(sum(tp_data@meta.data['expression_type']=='Olig2+/Nkx2-2+')/tot,3)
+  ndp <- sum(tp_data@meta.data['expression_type']=='Olig2+/Nkx2-2+')
+  no2 <- sum(tp_data@meta.data['expression_type']=='Olig2+')
+  nn2 <- sum(tp_data@meta.data['expression_type']=='Nkx2-2+')
+
+  t_o2 <- c(t_o2, o2)
+  t_n2 <- c(t_n2, n2)
+  t_dp <- c(t_dp, dp)
+  t_tot <- c(t_tot, tot)
+  t_ndp <- c(t_ndp, ndp)
+  t_no2 <- c(t_no2, no2)
+  t_nn2 <- c(t_nn2, nn2)
+}
+
+m.frac_df <- data.frame('Timepoint'=m_tps,
+                        'Species'=rep('Mouse',length(m_tps)),
+                        'Double_Positive_Cells'=t_dp,  
+                        'Olig2_Cells'=t_o2, 
+                        'Nkx2-2_Cells'=t_n2,
+                        'Number_DP'=t_ndp,
+                        'Number_Olig2'=t_no2,
+                        'Number_Nkx2-2'=t_nn2,
+                        'Total_Number'=t_tot)
+m.frac_df
+
+t_o2 <- c()
+t_dp <- c()
+t_n2 <- c()
+t_tot <- c()
+t_ndp <- c()
+t_no2 <- c()
+t_nn2 <- c()
+
+for (t in h_tps){
+  tp_data <- h.data[,h.data@meta.data$orig.timepoint==t]
+  tot <- length(tp_data@meta.data['expression_type']$expression_type)
+  o2 <- round(sum(tp_data@meta.data['expression_type']=='Olig2+')/tot,3)
+  n2 <- round(sum(tp_data@meta.data['expression_type']=='Nkx2-2+')/tot,3)
+  dp <- round(sum(tp_data@meta.data['expression_type']=='Olig2+/Nkx2-2+')/tot,3)
+  ndp <- sum(tp_data@meta.data['expression_type']=='Olig2+/Nkx2-2+')
+  no2 <- sum(tp_data@meta.data['expression_type']=='Olig2+')
+  nn2 <- sum(tp_data@meta.data['expression_type']=='Nkx2-2+')
+  
+  t_o2 <- c(t_o2, o2)
+  t_n2 <- c(t_n2, n2)
+  t_dp <- c(t_dp, dp)
+  t_tot <- c(t_tot, tot)
+  t_ndp <- c(t_ndp, ndp)
+  t_no2 <- c(t_no2, no2)
+  t_nn2 <- c(t_nn2, nn2)
+  
+}
+
+h.frac_df <- data.frame('Timepoint'=h_tps,
+                        'Species'=rep('Human',length(h_tps)),
+                        'Double_Positive_Cells'=t_dp,  
+                        'Olig2_Cells'=t_o2, 
+                        'Nkx2-2_Cells'=t_n2,
+                        'Number_DP'=t_ndp,
+                        'Number_Olig2'=t_no2,
+                        'Number_Nkx2-2'=t_nn2,                        
+                        'Total_Number'=t_tot)
+h.frac_df
+```
+
+```{r}
+bind_df <- rbind(m.frac_df,h.frac_df)
+
+write.csv(bind_df, "DP_proportions_comparison.csv")
+```
+

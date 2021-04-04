@@ -1,0 +1,137 @@
+
+#'
+#' 1. read CellRanger filtered matrices
+#' 2. add useful meta.data or `misc` information
+#' 3. save the objects
+#' 
+
+#+ load libraries
+library(Seurat)
+library(biomaRt)
+library(magrittr)
+library(tidyverse)
+
+getwd() %>% str_split('/') %>% unlist() %>% head(n=10) %>% str_c(collapse='/') %>% file.path(., 'scripts', 'seurat_processing', 'helper_functions.R') %>% source()
+
+packageVersion('Seurat') %>% sprintf(fmt='/// Seurat version: %s') %>% message()
+
+#+ collect_environment_variables
+cellranger_path <- Sys.getenv('CELLRANGER_PATH')
+dataset_name <- Sys.getenv('DATASET_NAME')
+species <- Sys.getenv('SPECIES') # hsapiens or mmusculus
+partitioning_table <- Sys.getenv('PARTITIONING_TABLE')
+save_path <- Sys.getenv('OUTPUT_PATH')
+
+#+ prepare_anything_else
+organism <- switch(species, human='hsapiens', mouse='mmusculus')
+
+#+ read_cell_ranger_into_seurat
+file.path(cellranger_path, 'outs', 'filtered_feature_bc_matrix') %>%
+  Read10X(gene.column=2, unique.features=TRUE) %>%
+  CreateSeuratObject(project=dataset_name,
+                     names.field=1, names.delim='_', meta.data=NULL,
+                     min.cells=0, min.features=0) -> seurat
+
+#+ make_biomart
+ensembl_release <- '93'
+ensembl_archive <- listEnsemblArchives() %>% dplyr::select(version, url) %>% deframe() %>% pluck(ensembl_release)
+ensembl_dataset <- str_c(organism, 'gene_ensembl', sep='_')
+sprintf(fmt='/// making mart for %s using release-%s %s [%s]', organism, ensembl_release, ensembl_dataset, ensembl_archive) %>% message()
+
+mart <- useMart(biomart='ensembl', host=ensembl_archive)
+mart_human <- useDataset(dataset='hsapiens_gene_ensembl', mart=mart)
+mart <- useDataset(dataset=ensembl_dataset, mart=mart)
+
+seurat@misc$mart <- mart
+
+#+ add_percentage_mitochondrial_expression
+getBM(mart=mart, filters='chromosome_name', values='Mt', attributes='external_gene_name') %>%
+  deframe() %>%
+  dplyr::intersect(rownames(seurat)) -> seurat@misc$mitochondrial_genes
+seurat <- PercentageFeatureSet(object=seurat, features=seurat@misc$mitochondrial_genes, col.name='percent_mt')
+
+#+ parse_dataset_name
+seurat@meta.data %<>%
+  as.data.frame() %>%
+  rownames_to_column('cell_id') %>%
+  mutate(orig.dataset=orig.ident) %>%
+  separate(col='orig.dataset', into=c('orig.species','orig.timepoint','orig.tissue','orig.replicate'), sep='_', remove=FALSE, convert=FALSE, extra='merge', fill='left') %>%
+  column_to_rownames('cell_id')
+
+#+ normalise_rna_slot
+sprintf('/// normalising RNA slot: %s', dataset_name) %>% message()
+seurat %<>% NormalizeData(normalization.method='LogNormalize', scale.factor=10000, verbose=FALSE)
+
+#+ initial_clustering_for_filtering
+sprintf('/// initial clustering: %s', dataset_name) %>% message()
+seurat %<>%
+  FindVariableFeatures(nfeatures=2000, verbose=FALSE) %>%
+  ScaleData(verbose=FALSE) %>%
+  RunPCA(reduction.name='pca', npcs=70, seed.use=1, verbose=FALSE) %>%
+  FindNeighbors(dims=seq(40)) %>%
+  FindClusters(resolution=seq(from=0.2, to=2, by=0.2), random.seed=1, group.singletons=TRUE, verbose=FALSE) 
+
+#+ initial_dimension_reduction
+sprintf('/// initial dimension reduction: %s', dataset_name) %>% message()
+seurat %<>% RunTSNE(dims=seq(40), reduction='pca', reduction.name='tsne', reduction.key='tSNA_', dim.embed=2, seed.use=1, verbose=FALSE)
+seurat %<>% RunUMAP(dims=seq(40), reduction='pca', reduction.name='umap', reduction.key='UMAP_', n.components=2, seed.use=1, verbose=FALSE)
+
+# * get scores for cell cycle phase; use the Seurat-provided cc.genes (human set)
+# * convert hsapiens to mmusculus using biomaRt
+#+ calculate_cell_cycle_scores
+sprintf('/// calculating cell cycle scores: %s', dataset_name) %>% message()
+cell_cycle_genes <- list(hsapiens=cc.genes, mmusculus=cc.genes)
+cell_cycle_genes$mmusculus %<>% lapply(getBM, mart=mart_human, attributes='mmusculus_homolog_associated_gene_name', filter='external_gene_name') %>% lapply(unlist, use.names=FALSE)
+seurat@misc$cc.genes <- cell_cycle_genes[[organism]]
+seurat %<>% CellCycleScoring(s.features=seurat@misc$cc.genes$s.genes, g2m.features=seurat@misc$cc.genes$g2m.genes, set.ident=FALSE)
+seurat$CC.Difference <- seurat$S.Score - seurat$G2M.Score
+
+#+ parse_partition_table
+sprintf('/// parsing partitioning table: %s', partitioning_table) %>% message()
+parse_partitioning_table <- function(file)
+  read.table(file=file, header=TRUE, sep='\t', stringsAsFactors=FALSE) %>%
+    select(Type, Neural_pop, Genes_map_step1, Genes_map_step2, DV_Color, Step1_Color, Step2_Color) %>%
+    group_by(Type, Neural_pop) %>%
+    mutate(n=n(),
+           l=if_else(n==1, '', letters[seq(n)])) %>%
+    ungroup() %>%
+    mutate(Neural_pop=str_c(Neural_pop, l, sep='')) %>%
+    select(-n, -l) %>%
+    gather(key='id_step', value='external_gene_name', Genes_map_step1, Genes_map_step2) %>%
+    plyr::adply(.margins=1, function(x) {
+      X <- select(.data=x, Type, Neural_pop, id_step)
+      external_gene_name <- select(.data=x, external_gene_name) %>% str_split(', *') %>% unlist()
+      crossing(X, external_gene_name)}) %>%
+    mutate(id_step=str_remove(id_step, 'Genes_map_step')) %>%
+    mutate_at(vars('Type', 'Neural_pop', 'id_step'), function(x) factor(x, levels=unique(x))) %>%
+    filter(external_gene_name != '') %>%
+    select(Type, Neural_pop, id_step, external_gene_name, everything())
+
+parse_partitioning_table(file=partitioning_table) %>%
+  pluck('external_gene_name') %>%
+  unique() -> marker_genes
+
+parse_partitioning_table(file=partitioning_table) %>%
+  select(Type, Neural_pop, external_gene_name) %>%
+  plyr::dlply(~Type+Neural_pop, select, external_gene_name) %>%
+  set_names(str_remove, pattern='\\.$') %>%
+  lapply(unlist, use.names=FALSE) %>%
+  lapply(function(x) x[x %in% rownames(seurat)]) %>%
+  Filter(f=length) -> gene_modules
+
+gene_modules %<>%
+  append(gene_modules[names(gene_modules) %>% startsWith('Progenitor')] %>% unlist() %>% unique() %>% list() %>% set_names('any_progenitor_marker')) %>%
+  append(gene_modules[names(gene_modules) %>% startsWith('Neuron')] %>% unlist() %>% unique() %>% list() %>% set_names('any_neuron_marker'))
+
+seurat@misc$gene_modules <- gene_modules
+
+#+ calculate_module_scores
+sprintf('/// calculating module scores: %s', Project(seurat)) %>% message()
+seurat %<>%
+  AddModuleScore(features=gene_modules, name='GeneModule-', seed=1)
+colnames(seurat@meta.data)[colnames(seurat@meta.data) %>% str_detect('^GeneModule-\\d+')] <- {names(gene_modules) %>% paste('GeneModule', ., sep='-')}
+
+#+ save_seurat_object
+save_seurat(seurat=seurat, save_path=save_path)
+
+

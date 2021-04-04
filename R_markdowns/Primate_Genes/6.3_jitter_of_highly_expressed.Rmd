@@ -1,0 +1,178 @@
+---
+title: "6.3_highly_expression_jitter_violin"
+output: html_notebook
+---
+
+```{r}
+.libPaths(c("/camp/lab/briscoej/working/Rory/.conda/my_envs/r_lab/lib/R/library",
+          "/camp/lab/briscoej/working/Rory/R_packages",
+          "/camp/home/maizelr/R/x86_64-pc-linux-gnu-library/3.6",
+          "/camp/apps/eb/software/R/3.6.2-foss-2019b/lib64/R/library"))
+```
+
+
+```{r}
+# load libraries
+library(sctree);
+library(Seurat);
+library(ggplot2);
+library(cowplot);
+library(patchwork);
+library(plyr);
+library(dplyr);
+library(data.table);
+library(RColorBrewer);
+library(grDevices);
+```
+
+```{r}
+human <- readRDS('../../seurat_objects/human_celltyped.rds')
+```
+
+```{r}
+pgs <- read.csv('primate_genes.txt', sep='\n', stringsAsFactors = FALSE)
+p_genes <- pgs$GENE
+
+CNS_prog <- c("Progenitor","Oligodendrocyte")
+CNS_neur <- c("Neuron")
+Mesoderm <- c("Mesoderm III","Mesoderm II","Mesoderm I","Mesoderm IV","Mesoderm V","Mesoderm VI","Myoblast")
+DRG_prog <- c('Neural crest progenitor', 'DRG Progenitor',"Sensory neuron progenitor")
+Per_neur <- c("Peripheral neuron")
+Hematopo <- c("Hematopoeitic","Erythropoeitic","Erythrocytes","Erythrocytes II","Blood")
+skincell <- c("Skin")
+other <- c("NULL","Erythropoeitic","Erythrocytes","Erythrocytes II","Myoblast","Blood")
+
+cell_type <- rep("NA",dim(human@meta.data)[1])
+sum(cell_type=='NA')
+cell_type[which(human$Type_step1 %in% CNS_prog)] <- 'CNS Progenitors'
+cell_type[which(human$Type_step1 %in% CNS_neur)] <- 'CNS Neurons'
+cell_type[which(human$Type_step1 %in% Mesoderm)] <- 'Mesoderm'
+cell_type[which(human$Type_step1 %in% DRG_prog)] <- 'PNS Progenitors'
+cell_type[which(human$Type_step1 %in% Per_neur)] <- 'PNS Neurons'
+cell_type[which(human$Type_step1 %in% Hematopo)] <- 'Hematopoietic Cells'
+cell_type[which(human$Type_step1 %in% skincell)] <- 'Skin'
+cell_type[which(human$Type_step1 %in% other)] <- 'Other'
+sum(cell_type=='NA')
+
+
+```
+
+```{r}
+k_genes <- c("TMEM14B","ZNF680","ZNF93","ZNF43","ZNF100","CCDC74B","ZNF90","TMEM99","CBWD2","DHRS4")
+```
+
+```{r}
+nct <- c("CNS Progenitors","CNS Neurons", "PNS Progenitors", "PNS Neurons")
+h_neur <- human[,cell_type %in% nct]
+neurct <- cell_type[cell_type %in% nct]
+```
+
+```{r}
+h_neur[['Timepoint']] = h_neur$orig.timepoint
+DefaultAssay(h_neur) <- 'RNA'
+Idents(h_neur) <- 'Timepoint'
+exdata <- as.data.frame(h_neur, genes = k_genes)
+identity <- Idents(h_neur)
+exdata$Cell <- rownames(exdata)
+exdata$Idents <- identity
+exdata$Type <- neurct
+#names(exdata) <- gsub('.','-',names(exdata), fixed = TRUE)
+exdata <- reshape2::melt(exdata, id.vars = c("Cell","Idents","Type"), measure.vars = k_genes,
+                         variable.name = "Feat", value.name = "Expr")
+```
+
+```{r}
+exdata <- exdata[exdata$Expr!=0,]
+```
+
+```{r}
+
+cols <- c("#1B9E77","#D95F02","#E7298A","#DFC27D","#7570B3","#8C510A","#BF812D","#D9D9D9")
+cols <- c("#D95F02","#1B9E77","#E7298A","#7570B3")
+
+c1 <- ggplot(exdata, aes(factor(Type, levels=c("CNS Progenitors","CNS Neurons", "PNS Progenitors", "PNS Neurons")), Expr, fill=Type)) +
+        # geom_jitter(position = position_jitter(0.1), alpha=0.25, 
+        #             aes(colour=Idents), size=.75) + scale_color_manual(values=rev(brewer.pal(4, 'Spectral'))) +
+        # geom_jitter(alpha=0.15, size=.5) +
+        geom_violin(scale = "width", adjust = 1, trim = TRUE, alpha=0.5, ) +
+        scale_y_continuous(expand = c(0, 0), position="right", labels = function(x)
+                           c(rep(x = "", times = length(x)-2), x[length(x) - 1], "")) +
+        #facet_grid(rows = vars(Idents), scales = "free", switch = "y") +
+        theme_cowplot(font_size = 12) +
+        facet_grid(rows = vars(Feat), cols = vars(factor(Type, levels=nct)), scales = "free", switch = "y") +
+        theme(legend.position = "none", panel.spacing = unit(0, "lines"),
+              panel.background = element_rect(fill = NA, color = "grey"),
+              strip.background = element_blank(),
+              aspect.ratio = 0.6,
+              strip.text = element_text(face = "bold"),
+             strip.text.x = element_blank(),
+              strip.text.y.left = element_text(angle = 0),
+              axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)) +
+        scale_fill_manual(values=cols) +
+        # ggtitle("Non-Zero Expression Distributions") + 
+        xlab(' ') + ylab("Non-Zero Expression Level") + 
+        guides(colour = guide_legend(override.aes = list(alpha = 1)))
+
+c1
+
+ggsave('../plots/6.4_highly_expressed_nonzero_violin.pdf')
+```
+
+
+```{r}
+h_neur[['Timepoint']] = h_neur$orig.timepoint
+DefaultAssay(h_neur) <- 'RNA'
+Idents(h_neur) <- 'Timepoint'
+exdata2 <- as.data.frame(h_neur, genes = k_genes)
+identity <- Idents(h_neur)
+exdata2$Cell <- rownames(exdata2)
+exdata2$Idents <- identity
+exdata2$Type <- neurct
+#names(exdata) <- gsub('.','-',names(exdata), fixed = TRUE)
+exdata2 <- reshape2::melt(exdata2, id.vars = c("Cell","Idents","Type"), measure.vars = k_genes,
+                         variable.name = "Feat", value.name = "Expr")
+
+
+exdata2['nonzero'] = exdata2$Expr>0
+exdata2 %>%
+  group_by(Type, Feat) %>%
+  summarise(pct_nonzero=sum(nonzero)/length(nonzero)) -> exdata2
+```
+```{r}
+exdata2$pct_nonzero <- exdata2$pct_nonzero*100
+```
+
+
+```{r}
+c2 <- ggplot(exdata2, aes(x=factor(Type, levels=nct), y=pct_nonzero, fill=Type)) +
+        # geom_jitter(position = position_jitter(0.1), alpha=0.25, 
+        #             aes(colour=Idents), size=.75) + scale_color_manual(values=rev(brewer.pal(4, 'Spectral'))) +
+        # geom_jitter(alpha=0.15, size=.5) +
+        geom_bar(stat = 'identity', alpha=0.75) +
+        scale_y_continuous(expand = c(0, 0), position="right", labels = function(x)
+                           c(rep(x = "", times = length(x)-2), x[length(x) - 1], "")) +
+        facet_grid(rows = vars(Feat), scales = "free", switch = "y") +
+        theme_cowplot(font_size = 12) +
+        theme(legend.position = "none", panel.spacing = unit(0, "lines"),
+              panel.background = element_rect(fill = NA, color = "grey"),
+              strip.background = element_blank(),
+              aspect.ratio = 0.2,
+              strip.text = element_text(face = "bold"),
+             strip.text.x = element_blank(),
+              strip.text.y.left = element_text(angle = 0),
+              axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)) +
+        scale_fill_manual(values=cols) +
+        # ggtitle("Non-Zero Expression Distributions") + 
+        xlab(' ') + ylab("% Cells Expressing") +
+        coord_cartesian(ylim = c(0, 80)) +
+        guides(colour = guide_legend(override.aes = list(alpha = 1)))
+        
+
+c1 + c2
+ggsave("../plots/6.3_highly_expressed_EXPRESSION_PLOTS.pdf")
+```
+
+
+
+
+

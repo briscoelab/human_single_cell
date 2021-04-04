@@ -1,0 +1,217 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r}
+.libPaths(c("/camp/lab/briscoej/working/Rory/.conda/my_envs/r_lab/lib/R/library",
+          "/camp/lab/briscoej/working/Rory/R_packages",
+          "/camp/home/maizelr/R/x86_64-pc-linux-gnu-library/3.6",
+          "/camp/apps/eb/software/R/3.6.2-foss-2019b/lib64/R/library"))
+```
+
+
+```{r}
+# load libraries
+library(sctree);
+library(Seurat);
+library(ggplot2);
+library(cowplot);
+library(patchwork);
+library(plyr);
+library(dplyr);
+library(data.table);
+library(RColorBrewer);
+library(grDevices);
+```
+
+```{r}
+human <- readRDS('../../seurat_objects/human_celltyped.rds')
+```
+
+```{r}
+pD <- c("dp1","dp2","dp3","dp4","dp5","dp6")
+pI <- c("p0","p1","p2")
+
+cell_type <- rep("Other",dim(human@meta.data)[1])
+cell_type[which(human$Type_step2 == 'RP')] <- 'RP'
+cell_type[which(human$Type_step2 %in% pD)] <- 'pD'
+cell_type[which(human$Type_step2 %in% pI)] <- 'pI'
+cell_type[which(human$Type_step2 =="pMN")] <- 'pMN'
+cell_type[which(human$Type_step2 == "p3")] <- 'p3'
+cell_type[which(human$Type_step2 == "FP")] <- 'FP'
+
+human[['Broad_DV_Domain']] <- cell_type 
+```
+
+```{r}
+pgs <- read.csv('primate_genes.txt', sep='\n', stringsAsFactors = FALSE)
+p_genes <- pgs$GENE
+```
+
+
+```{r}
+h_neur <- human[,(human$Broad_DV_Domain!='Other')]
+DefaultAssay(h_neur) <- 'SCT'
+Idents(h_neur) <- 'Broad_DV_Domain'
+exdata <- as.data.frame(h_neur, genes = p_genes)
+identity <- Idents(h_neur)
+exdata$Cell <- rownames(exdata)
+exdata$Type <- identity
+#names(exdata) <- gsub('.','-',names(exdata), fixed = TRUE)
+exdata <- reshape2::melt(exdata, id.vars = c("Cell","Type"), measure.vars = p_genes,
+                         variable.name = "Gene", value.name = "Expression")
+
+exdata %>%
+  group_by(Type, Gene) %>%
+  summarise(mean_value=mean(Expression)) %>%
+  group_by(Gene) %>%
+  mutate(mean_value_scaled=mean_value/max(mean_value)) -> exdata
+```
+
+```{r}
+domains <- c("FP","p3","pMN","pI","pD","RP")
+cols <- c("#f14624ff","#50abe4ff","#393536ff","#2f3591ff","#2faa49ff","#f14624ff")
+
+cols <- c("#2faa49ff","#2f3591ff","#50abe4ff","#393536ff","#f14624ff","#f14624ff")
+
+library(purrr)
+mv <- (aggregate(x = exdata[exdata$Type!='Other',]$mean_value,
+          by = list(exdata[exdata$Type!='Other',]$Gene),
+          FUN = max)) %>% map_df(rev)
+
+xcols <-  if_else(mv$x>0.1, 'red','black')
+
+
+ggplot(data=exdata) +
+      aes(x=Gene, y=factor(Type, levels=domains), size=mean_value, fill=Type) +
+      geom_vline(xintercept=seq(1,length(p_genes),1), colour='grey', linetype=1, alpha=0.2) +
+      geom_point(shape=21, stroke=0.6) +
+      scale_fill_manual(values=(cols)) +
+      scale_x_discrete(position='bottom') +
+      scale_size_area(max_size=3) + 
+      guides(fill='none', size=guide_legend()) +
+      theme(axis.text.x=element_text(angle=45, hjust=1, vjust=1, size=rel(0.7)),
+            axis.title.x=element_blank(),
+              panel.background = element_rect(fill = NA, color = "black"),
+              strip.background = element_blank(),
+            panel.grid.major.x=element_line()) + 
+      labs(x='Gene', y='Cell Type', fill='Cell Type', size='Mean\nExpression') + 
+      ggtitle('Expression Across Broad Dorsoventral Progenitor Domains')
+
+ggsave('../plots/6_broad_dorsoventral_PROGENITORS.pdf')
+```
+
+```{r}
+pD <- c("dl1","dl2","dl3","dl4","dl5","dl6")
+pI <- c("V0","V1","V2a","V2b")
+
+cell_type <- rep("Other",dim(human@meta.data)[1])
+cell_type[which(human$Type_step2 %in% pD)] <- 'dl'
+cell_type[which(human$Type_step2 %in% pI)] <- 'V0-V2'
+cell_type[which(human$Type_step2 =="MN")] <- 'MN'
+cell_type[which(human$Type_step2 == "V3")] <- 'V3'
+
+human[['Broad_DV_Domain']] <- cell_type 
+
+h_neur <- human[,(human$Broad_DV_Domain!='Other')]
+DefaultAssay(h_neur) <- 'SCT'
+Idents(h_neur) <- 'Broad_DV_Domain'
+exdata <- as.data.frame(h_neur, genes = p_genes)
+identity <- Idents(h_neur)
+exdata$Cell <- rownames(exdata)
+exdata$Type <- identity
+#names(exdata) <- gsub('.','-',names(exdata), fixed = TRUE)
+exdata <- reshape2::melt(exdata, id.vars = c("Cell","Type"), measure.vars = p_genes,
+                         variable.name = "Gene", value.name = "Expression")
+
+exdata %>%
+  group_by(Type, Gene) %>%
+  summarise(mean_value=mean(Expression)) %>%
+  group_by(Gene) %>%
+  mutate(mean_value_scaled=mean_value/max(mean_value)) -> exdata
+```
+
+```{r}
+domains <- c("V3","MN","V0-V2","dl")
+cols <- c("#f14624ff","#50abe4ff","#393536ff","#2f3591ff","#2faa49ff","#f14624ff")
+
+cols <- c("#50abe4ff","#2f3591ff","#393536ff","#2faa49ff")
+
+
+ggplot(data=exdata) +
+      aes(x=Gene, y=factor(Type, levels=domains), size=mean_value, fill=Type) +
+      geom_vline(xintercept=seq(1,length(p_genes),1), colour='grey', linetype=1, alpha=0.2) +
+      geom_point(shape=21, stroke=0.6) +
+      scale_fill_manual(values=(cols)) +
+      scale_x_discrete(position='bottom') +
+      scale_size_area(max_size=3) + 
+      guides(fill='none', size=guide_legend()) +
+      theme(axis.text.x=element_text(angle=45, hjust=1, vjust=1, size=rel(0.7)),
+            axis.title.x=element_blank(),
+              panel.background = element_rect(fill = NA, color = "black"),
+              strip.background = element_blank(),
+            panel.grid.major.x=element_line()) + 
+      labs(x='Gene', y='Cell Type', fill='Cell Type', size='Mean\nExpression') + 
+      ggtitle('Expression Across Broad Dorsoventral Neuronal Domains')
+
+ggsave('../plots/6_broad_dorsoventral_NEURONS.pdf')
+
+```
+
+
+
+
+```{r}
+h_feats <- c("HEPN1")
+DefaultAssay(human) <- 'RNA'
+Idents(human) <- 'orig.timepoint'
+exdata <- as.data.frame(human, genes = h_feats)
+identity <- Idents(human)
+exdata$Cell <- rownames(exdata)
+exdata$Idents <- identity
+exdata$Domain <- human$Broad_DV_Domain
+# names(exdata) <- gsub('.','-',names(exdata), fixed = TRUE)
+exdata <- reshape2::melt(exdata, id.vars = c("Cell","Idents","Domain"), measure.vars = h_feats,
+                         variable.name = "Feat", value.name = "Expr")
+
+cols <- c("#50abe4ff","#2f3591ff","#393536ff","#2faa49ff","#D9D9D9")
+
+cols <- c("#50abe4ff","#2f3591ff","#D9D9D9","#393536ff","#2faa49ff")
+
+c <- ggplot(exdata, aes(factor(Domain, levels=c("V3","MN","V0-V2","dl",'Other')), Expr, fill = Domain)) +
+        # geom_jitter(position = position_jitter(0.1), alpha=0.5, aes(colour=Domain), size=.5) +
+        geom_violin(scale = "width", adjust = 1, trim = TRUE, alpha=.75) +
+        scale_y_continuous(expand = c(0, 0), position="right", labels = function(x)
+                           c(rep(x = "", times = length(x)-2), x[length(x) - 1], "")) +
+        facet_grid(rows = vars(Idents), scales = "free", switch = "y") +
+        theme_cowplot(font_size = 12) +
+        scale_fill_manual(values=(cols)) +
+        theme(legend.position = "none", panel.spacing = unit(0, "lines"),
+              panel.background = element_rect(fill = NA, color = "black"),
+              strip.background = element_blank(),
+              strip.text = element_text(face = "bold"),
+              strip.text.y.left = element_text(angle = 0),
+              axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+        ggtitle("HEPN1 Expression Through Time") + xlab("Domain") + ylab("Expression Level")
+
+c
+
+ggsave('../plots/6.4_HEPN1_expression.pdf')
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,69 @@
+#! /bin/env Rscript
+
+#'
+#' 1. load antler classifications
+#' 2. select cell ids from antler that match subset
+#' 3. save a vector of cell IDs _to keep_ (overwriting the existing file)
+#' 
+
+#+ load libraries
+library(magrittr)
+library(tidyverse)
+
+#+ collect_environment_variables
+output_dataset <- Sys.getenv('OUTPUT_DATASET')
+save_path <- Sys.getenv('SAVE_PATH') %>% file.path(., output_dataset)
+antler_classifications <- 'cell_types.rds'
+
+dataset.filter <- Sys.getenv('INPUT_DATASET')
+partitioning_table.filter <- Sys.getenv('PARTITIONING_TABLE')
+types_step1 <- Sys.getenv('TYPES_STEP1')
+types_step2 <- Sys.getenv('TYPES_STEP2')
+
+sprintf(fmt='/// output_dataset: %s', output_dataset) %>% message()
+sprintf(fmt='/// save_path: %s', save_path) %>% message()
+sprintf(fmt='/// antler_classifications: %s', antler_classifications) %>% message()
+sprintf(fmt='/// dataset.filter: %s', dataset.filter) %>% message()
+sprintf(fmt='/// partitioning_table.filter: %s', partitioning_table.filter) %>% message()
+sprintf(fmt='/// types_step1: %s', types_step1) %>% message()
+sprintf(fmt='/// types_step2: %s', types_step2) %>% message()
+
+#+ general_setup
+dir.create(path=save_path, showWarnings=FALSE, recursive=TRUE)
+
+#+ get_classification_filters
+types_step1 %>%
+  str_split('\\+') %>%
+  pluck(1) -> step1.filter
+
+types_step2 %>%
+  str_split('\\+') %>%
+  pluck(1) -> step2.filter
+
+types_step1 %>% str_c(collapse='+') %>% sprintf(fmt='/// Type_step1: %s') %>% message()
+types_step2 %>% str_c(collapse='+') %>% sprintf(fmt='/// Type_step2: %s') %>% message()
+
+#+ load_antler_classifications
+readRDS(antler_classifications) %>%
+  pluck(str_c(dataset.filter, partitioning_table.filter, sep='.')) %>%
+  mutate(cell_id=str_remove(cell_id, '_\\d+$')) %T>%
+  assign(x='nrow_antler', value=nrow(.), envir=globalenv()) -> antler
+
+if(!(length(step1.filter)==1 && step1.filter==''))
+  antler %<>% filter(Type_step1 %in% step1.filter)
+
+if(!(length(step2.filter)==1 && step2.filter==''))
+  antler %<>% filter(Type_step2 %in% step2.filter)
+
+antler %>% nrow() %>% sprintf(fmt='/// n cells selected: %s from a total of %s', nrow_antler) %>% message()
+
+#+ write_cell_ids
+antler %>%
+  plyr::dlply(~orig.dataset, pluck, 'cell_id') %>%
+  Map(cell_ids=., replicate=names(.), f=function(cell_ids, replicate)
+    str_c(replicate, 'rds', sep='.') %>%
+      file.path(save_path, .) %T>%
+      saveRDS(object=cell_ids))
+
+#+ finish
+sprintf('/// done %s') %>% message()

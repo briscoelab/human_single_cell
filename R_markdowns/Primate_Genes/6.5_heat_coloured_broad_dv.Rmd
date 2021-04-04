@@ -1,0 +1,169 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+.libPaths(c("/camp/lab/briscoej/working/Rory/.conda/my_envs/r_lab/lib/R/library",
+          "/camp/lab/briscoej/working/Rory/R_packages",
+          "/camp/home/maizelr/R/x86_64-pc-linux-gnu-library/3.6",
+          "/camp/apps/eb/software/R/3.6.2-foss-2019b/lib64/R/library"))
+```
+
+
+```{r}
+# load libraries
+library(sctree);
+library(Seurat);
+library(ggplot2);
+library(cowplot);
+library(patchwork);
+library(plyr);
+library(dplyr);
+library(data.table);
+library(RColorBrewer);
+library(grDevices);
+```
+
+```{r}
+human <- readRDS('../../seurat_objects/human_celltyped.rds')
+```
+
+```{r}
+unique(human$Type_step2)
+```
+
+
+```{r}
+pD <- c("dp1","dp2","dp3","dp4","dp5","dp6")
+pI <- c("p0","p1","p2")
+
+cell_type <- rep("Other",dim(human@meta.data)[1])
+cell_type[which(human$Type_step2 == 'RP')] <- 'RP'
+cell_type[which(human$Type_step2 %in% pD)] <- 'pD'
+cell_type[which(human$Type_step2 %in% pI)] <- 'pI'
+cell_type[which(human$Type_step2 =="pMN")] <- 'pMN'
+cell_type[which(human$Type_step2 == "p3")] <- 'p3'
+cell_type[which(human$Type_step2 == "FP")] <- 'FP'
+
+human[['Broad_DV_Domain']] <- cell_type 
+```
+
+```{r}
+pgs <- read.csv('primate_genes.txt', sep='\n', stringsAsFactors = FALSE)
+p_genes <- pgs$GENE
+```
+
+
+```{r}
+h_neur <- human[,(human$Broad_DV_Domain!='Other')]
+DefaultAssay(h_neur) <- 'SCT'
+Idents(h_neur) <- 'Broad_DV_Domain'
+exdata <- as.data.frame(h_neur, genes = p_genes)
+identity <- Idents(h_neur)
+exdata$Cell <- rownames(exdata)
+exdata$Type <- identity
+#names(exdata) <- gsub('.','-',names(exdata), fixed = TRUE)
+exdata <- reshape2::melt(exdata, id.vars = c("Cell","Type"), measure.vars = p_genes,
+                         variable.name = "Gene", value.name = "Expression")
+
+exdata %>%
+  group_by(Type, Gene) %>%
+  summarise(mean_value=mean(Expression), pct_exp=100*mean(Expression>0)) %>%
+  group_by(Gene) %>%
+  mutate(mean_value_scaled=mean_value/max(mean_value)) -> exdata
+```
+
+
+```{r}
+domains <- c("FP","p3","pMN","pI","pD","RP")
+cols <- c("#f14624ff","#50abe4ff","#393536ff","#2f3591ff","#2faa49ff","#f14624ff")
+
+cols <- c("#2faa49ff","#2f3591ff","#50abe4ff","#393536ff","#f14624ff","#f14624ff")
+
+library(purrr)
+mv <- (aggregate(x = exdata[exdata$Type!='Other',]$mean_value,
+          by = list(exdata[exdata$Type!='Other',]$Gene),
+          FUN = max)) %>% map_df(rev)
+
+xcols <-  if_else(mv$x>0.1, 'red','black')
+
+
+ggplot(data=exdata) +
+      aes(x=Gene, y=factor(Type, levels=domains), size=pct_exp, fill=mean_value) +
+      geom_vline(xintercept=seq(1,length(p_genes),1), colour='grey', linetype=1, alpha=0.2) +
+      geom_point(shape=21, stroke=0.6) +
+      scale_x_discrete(position='bottom') +
+      scale_size_area(max_size=3, limits=c(0,100)) + 
+      scale_fill_continuous(type = "viridis", guide=guide_colourbar(title='Mean\nExpression', order = 1), limits=c(0,0.9), breaks=c(0,0.3,0.6,0.9)) +
+      guides(size = guide_legend(title='Percentage\nExpression', order = 2)) + 
+      theme(axis.text.x=element_text(angle=45, hjust=1, vjust=1, size=rel(0.7)),
+            axis.title.x=element_blank(),
+            panel.background = element_rect(fill = NA, color = "black"),
+            strip.background = element_blank(),
+            panel.grid.major.x=element_line()) + 
+      labs(x='Gene', y='Cell Type', fill='Cell Type') + 
+      ggtitle('Expression Across Broad Dorsoventral Progenitor Domains')
+
+ggsave('../plots/6_broad_dorsoventral_PROGENITORS.pdf')
+
+```
+
+```{r}
+pD <- c("dl1","dl2","dl3","dl4","dl5","dl6")
+pI <- c("V0","V1","V2a","V2b")
+
+cell_type <- rep("Other",dim(human@meta.data)[1])
+cell_type[which(human$Type_step2 %in% pD)] <- 'dl'
+cell_type[which(human$Type_step2 %in% pI)] <- 'V0-V2'
+cell_type[which(human$Type_step2 =="MN")] <- 'MN'
+cell_type[which(human$Type_step2 == "V3")] <- 'V3'
+
+human[['Broad_DV_Domain']] <- cell_type 
+
+h_neur <- human[,(human$Broad_DV_Domain!='Other')]
+DefaultAssay(h_neur) <- 'SCT'
+Idents(h_neur) <- 'Broad_DV_Domain'
+exdata <- as.data.frame(h_neur, genes = p_genes)
+identity <- Idents(h_neur)
+exdata$Cell <- rownames(exdata)
+exdata$Type <- identity
+#names(exdata) <- gsub('.','-',names(exdata), fixed = TRUE)
+exdata <- reshape2::melt(exdata, id.vars = c("Cell","Type"), measure.vars = p_genes,
+                         variable.name = "Gene", value.name = "Expression")
+
+exdata %>%
+  group_by(Type, Gene) %>%
+  summarise(mean_value=mean(Expression), pct_exp=100*mean(Expression>0)) %>%
+  group_by(Gene) %>%
+  mutate(mean_value_scaled=mean_value/max(mean_value)) -> exdata
+```
+
+```{r}
+domains <- c("V3","MN","V0-V2","dl")
+cols <- c("#f14624ff","#50abe4ff","#393536ff","#2f3591ff","#2faa49ff","#f14624ff")
+
+cols <- c("#50abe4ff","#2f3591ff","#393536ff","#2faa49ff")
+
+
+ggplot(data=exdata) +
+      aes(x=Gene, y=factor(Type, levels=domains), size=pct_exp, fill=mean_value) +
+      geom_vline(xintercept=seq(1,length(p_genes),1), colour='grey', linetype=1, alpha=0.2) +
+      geom_point(shape=21, stroke=0.6) +
+      scale_fill_continuous(type = "viridis", guide=guide_colourbar(title='Mean\nExpression', order = 1), limits=c(0,0.9), breaks=c(0,0.3,0.6,0.9)) +
+      scale_x_discrete(position='bottom') +
+      scale_size_area(max_size=3, limits=c(0,100)) + 
+      guides(size = guide_legend(title='Percentage\nExpression', order = 2)) + 
+      theme(axis.text.x=element_text(angle=45, hjust=1, vjust=1, size=rel(0.7)),
+            axis.title.x=element_blank(),
+              panel.background = element_rect(fill = NA, color = "black"),
+              strip.background = element_blank(),
+            panel.grid.major.x=element_line()) + 
+      labs(x='Gene', y='Cell Type', fill='Cell Type') + 
+      ggtitle('Expression Across Broad Dorsoventral Neuronal Domains')
+
+ggsave('../plots/6_broad_dorsoventral_NEURONS.pdf')
+
+```
+
+

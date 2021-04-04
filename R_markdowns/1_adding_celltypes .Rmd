@@ -1,0 +1,62 @@
+---
+title: "1_adding_celltypes"
+output: html_notebook
+---
+
+
+```{r}
+.libPaths(c("/camp/lab/briscoej/working/Rory/.conda/my_envs/r_lab/lib/R/library",
+          "/camp/lab/briscoej/working/Rory/R_packages",
+          "/camp/home/maizelr/R/x86_64-pc-linux-gnu-library/3.6",
+          "/camp/apps/eb/software/R/3.6.2-foss-2019b/lib64/R/library"))
+```
+
+```{r}
+# load libraries
+library(sctree);
+library(Seurat);
+library(ggplot2);
+library(cowplot);
+library(patchwork);
+library(plyr);
+library(dplyr);
+library(data.table);
+```
+
+```{r}
+human <- readRDS('../seurat_objects/human.rds')
+mouse <- readRDS('../seurat_objects/mouse.rds')
+celltypes <- read.csv('../data/cell_types.tsv', sep='\t')
+```
+
+```{r}
+h.ct <- celltypes[(celltypes$dataset=='human' & celltypes$partitioning_table_name=="human_partitioning_table.2021-01-05"),]
+m.ct <- celltypes[(celltypes$dataset=='mouse' & celltypes$partitioning_table_name=="mouse_partitioning_table.2021-01-05"),]
+```
+
+```{r}
+human@meta.data['Type_step1'] = h.ct['Type_step1']
+human@meta.data['Type_step2'] = h.ct['Type_step2']
+mouse@meta.data['Type_step1'] = m.ct['Type_step1']
+mouse@meta.data['Type_step2'] = m.ct['Type_step2']
+```
+
+```{r}
+saveRDS(human, "../seurat_objects/human_celltyped.rds")
+saveRDS(mouse, "../seurat_objects/mouse_celltyped.rds")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

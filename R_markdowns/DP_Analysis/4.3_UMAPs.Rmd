@@ -1,0 +1,160 @@
+---
+title: "4.3_UMAPs"
+output: html_notebook
+---
+
+```{r}
+.libPaths(c("/camp/lab/briscoej/working/Rory/.conda/my_envs/r_lab/lib/R/library",
+          "/camp/lab/briscoej/working/Rory/R_packages",
+          "/camp/home/maizelr/R/x86_64-pc-linux-gnu-library/3.6",
+          "/camp/apps/eb/software/R/3.6.2-foss-2019b/lib64/R/library"))
+```
+
+
+```{r}
+# load libraries
+library(sctree);
+library(Seurat);
+library(ggplot2);
+library(cowplot);
+library(patchwork);
+library(plyr);
+library(dplyr);
+library(data.table);
+library(RColorBrewer);
+library(grDevices);
+```
+
+```{r}
+human <- readRDS('../../seurat_objects/human_celltyped.rds')
+mouse <- readRDS('../../seurat_objects/mouse_celltyped.rds')
+```
+
+```{r}
+h_prog <- human[,(human$Type_step1=='Progenitor' | human$Type_step1=='Oligodendrocyte')]
+m_prog <- mouse[,(mouse$Type_step1=='Progenitor' | mouse$Type_step1=='Oligodendrocyte')]
+```
+
+```{r}
+# don't consider e8.5
+h_tps <- unique(h_prog@meta.data$orig.timepoint)
+m_tps <- unique(m_prog@meta.data$orig.timepoint)
+
+process_dataset <- function(data, gene_names){
+  # subset only relevant cells, based on Olig2 and Nkx2-2
+  o.exp = GetAssayData(object = data, assay = "RNA", slot = "data")[gene_names[1],]
+  n.exp = GetAssayData(object = data, assay = "RNA", slot = "data")[gene_names[2],]
+  pos_cells <- names(which(o.exp>0 | n.exp>0))
+  subsetted_cells <- subset(data,cells=pos_cells)
+  
+  #classify each cell based on marker expression
+  so.exp = GetAssayData(object = subsetted_cells, assay = "RNA", slot = "data")[gene_names[1],]
+  sn.exp = GetAssayData(object = subsetted_cells, assay = "RNA", slot = "data")[gene_names[2],]
+  olig <- which(so.exp>0 & sn.exp==0)
+  nkx2 <- which(so.exp==0 & sn.exp>0)
+  both <- which(so.exp>0 & sn.exp>0)
+  
+  # add ID info
+  cell_ids <- rep(0,dim(subsetted_cells@meta.data)[1])
+  cell_ids[olig] <- 'Olig2+'
+  cell_ids[nkx2] <- 'Nkx2-2+'
+  cell_ids[both] <- 'Olig2+/Nkx2-2+'
+  subsetted_cells@meta.data['expression_type'] <- cell_ids
+  
+  # for SCT slot, we want to select highly variable genes for this relevant population
+  subsetted_cells <- FindVariableFeatures(subsetted_cells, nfeatures = 5000, assay = 'SCT');
+  
+  DefaultAssay(subsetted_cells) <- 'SCT'
+  all.genes <- rownames(subsetted_cells)
+  subsetted_cells <- ScaleData(subsetted_cells, features = all.genes);
+  
+  # rerun PCA & UMAP. Do for integrated, as this plots nicer, though SCT can be used for analysis since integrated doesn't contain the genes we care about.
+  subsetted_cells <- RunPCA(subsetted_cells, assay = 'integrated', npcs = 50, verbose = FALSE, reduction.name='sct_pca');
+  subsetted_cells <- RunUMAP(subsetted_cells, assay = 'integrated', reduction = "sct_pca", dims = 1:20, reduction.name='sct_umap', verbose = FALSE);
+  
+  return(subsetted_cells)
+}
+
+h.data <- process_dataset(h_prog, gene_names = c('OLIG2','NKX2-2'))
+m.data <- process_dataset(m_prog, gene_names = c('Olig2','Nkx2-2'))
+```
+
+```{r}
+color_ID <- rep('Single Positive Cells',dim(h.data@meta.data)[1])
+
+for (t in h_tps){
+  color_ID[which(h.data@meta.data$orig.timepoint==t & h.data@meta.data$expression_type=='Olig2+/Nkx2-2+')] = t
+}
+
+h.data@meta.data['UMAP_color'] = color_ID 
+```
+
+
+```{r}
+# DefaultAssay(h.data) <- 'integrated'
+# h.data <- FindNeighbors(h.data, dims = 1:10)
+# h.data <- FindClusters(h.data, resolution = 0.5)
+# DimPlot(h.data, reduction = "umap")
+```
+
+
+
+```{r}
+# a few outlier cells ruin the UMAP
+h.data <- h.data[,(h.data@reductions$sct_umap@cell.embeddings[,1] < 10)]
+```
+
+
+
+```{r}
+plot1 <- DimPlot(h.data, reduction='sct_umap', cols=c("#85CD94","#8588BE","salmon"),
+        group.by = 'expression_type') + ggtitle(label = 'Human: Nkx2-2+ & Olig2+ Cells') + xlab('UMAP1') + ylab('UMAP2')
+plot1
+ggsave('../plots/4_DP_cells_HUMAN_UMAP.pdf')
+```
+
+
+```{r}
+plot2 <- DimPlot(h.data, reduction='sct_umap', cols=c('grey95',rev(brewer.pal(4, 'Spectral'))),
+         group.by = 'UMAP_color', order=rev(c('Single Positive Cells','CS12','CS14','CS17','CS19'))) + ggtitle(label = 'Human: DPCs by Timepoint') + xlab('UMAP1') + ylab('UMAP2')
+plot2
+ggsave('../plots/4_DP_cells_HUMAN_UMAP_TIMEPOINT.pdf')
+```
+
+Now mouse...
+
+
+
+```{r}
+color_ID <- rep('Single Positive Cells',dim(m.data@meta.data)[1])
+
+for (t in m_tps){
+  color_ID[which(m.data@meta.data$orig.timepoint==t & m.data@meta.data$expression_type=='Olig2+/Nkx2-2+')] = gsub('5','.5',tolower(t))
+}
+
+m.data@meta.data['UMAP_color'] = color_ID 
+```
+
+```{r}
+plot.3 <- DimPlot(m.data, reduction='sct_umap', 
+          group.by = 'expression_type', cols=c("#85CD94","#8588BE","salmon")) + 
+                                                 ggtitle(label = 'Mouse: Nkx2-2+ & Olig2+ Cells') + xlab('UMAP1') + ylab('UMAP2')
+          
+plot.3
+ggsave('../plots/4_DP_cells_MOUSE_UMAP.pdf')
+```
+
+
+```{r}
+plot4 <- DimPlot(m.data, reduction='sct_umap', cols=c('grey95',rev(brewer.pal(5, 'Spectral'))),
+         group.by = 'UMAP_color', order=rev(c('Single Positive Cells','e9.5','e10.5','e11.5','e12.5','e13.5'))) + 
+  ggtitle(label = 'Mouse: DPCs by Timepoint') + xlab('UMAP1') + ylab('UMAP2')
+plot4
+ggsave('../plots/4_DP_cells_MOUSE_UMAP_TIMEPOINT.pdf')
+```
+
+
+
+
+
+

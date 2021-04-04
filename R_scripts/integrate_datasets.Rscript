@@ -1,0 +1,100 @@
+#! /bin/env Rscript
+
+#'
+#' 1. read normalised objects
+#' 2. group the sample_metadata to get datasets to integrate
+#' 3. perform integration
+#' 4. save the objects
+#' 
+
+#+ load libraries
+library(doMC, lib.loc='~/R/x86_64-pc-linux-gnu-library/3.6')
+library(future)
+library(Seurat)
+library(magrittr)
+library(tidyverse)
+
+getwd() %>% str_split('/') %>% unlist() %>% head(n=10) %>% str_c(collapse='/') %>% file.path(., 'scripts', 'seurat_processing', 'helper_functions.R') %>% source()
+
+packageVersion('Seurat') %>% sprintf(fmt='/// Seurat version: %s') %>% message()
+
+#+ collect_environment_variables
+input_seurat_rds_list <- Sys.getenv('INPUT_SEURAT_RDS_LIST')
+nthreads <- Sys.getenv('NTHREADS') %>% as.numeric()
+merged_map_name <- Sys.getenv('MERGED_MAP_NAME')
+save_path <- Sys.getenv('OUTPUT_PATH')
+provenance_name <- Sys.getenv(x='PROVENANCE_NAME', unset=get_script_step_name())
+
+#+ setup
+doMC::registerDoMC(nthreads)
+
+plan(multiprocess, workers=nthreads)
+options(future.globals.maxSize=20*1024^3) # change `future` max object size
+
+#+ get_list_of_maps_to_merge
+datasets_to_integrate <- str_split(string=input_seurat_rds_list, pattern=' ') %>% unlist()
+sprintf('/// merging %s from %s', merged_map_name, str_c(datasets_to_integrate, collapse=',')) %>% message()
+
+#+ load_normalised_objects
+message('/// loading objects')
+seurats <- plyr::llply(datasets_to_integrate, .parallel=TRUE, readRDS)
+names(seurats) <- sapply(seurats, Project)
+lapply(seurats, ncol) %T>% print() %>% Reduce(f='+') %>% sprintf(fmt='/// total cells: %s') %>% message()
+
+#+ integrate_maps
+sprintf('/// selecting integration features for: %s', merged_map_name) %>% message()
+integration_features <- SelectIntegrationFeatures(object.list=seurats, nfeatures=3000) # SCTransform used 3000 features
+
+# if there are multiple datasets, merge them otherwise effectively rename it
+if(length(datasets_to_integrate)>1) {
+  sprintf('/// integrating datasets for: %s', merged_map_name) %>% message()
+
+  # get k.filter
+  k.filter <- min(200, min(sapply(seurats, ncol)))
+  sprintf('/// k.filter for %s: %s', merged_map_name, k.filter) %>% message()
+
+  PrepSCTIntegration(object.list=seurats, anchor.features=integration_features, assay='SCT', verbose=FALSE) %>%
+    FindIntegrationAnchors(normalization.method='SCT', anchor.features=integration_features, k.filter=k.filter, verbose=FALSE) %>%
+    IntegrateData(normalization.method='SCT', verbose=FALSE) -> seurat
+
+  # set metadata for the integrated dataset
+  sprintf('/// setting metadata for: %s', merged_map_name) %>% message()
+  seurat@misc$mart <- seurats[[1]]@misc$mart
+  seurat@misc$mitochondrial_genes <- seurats[[1]]@misc$mitochondrial_genes
+  seurat@misc$cc.genes <- seurats[[1]]@misc$cc.genes
+  seurat@misc$gene_modules <- seurats[[1]]@misc$gene_modules
+
+  seurat@misc$cells_filtered <- TRUE
+  seurat@misc$integrated_dataset <- TRUE
+
+  seurats %>%
+    plyr::llply(purrr::pluck, 'meta.data') %>%
+    plyr::llply(as.data.frame, stringsAsFactors=FALSE) %>%
+    plyr::ldply(.id='element_name', rownames_to_column, var='cell_id') -> seurat@misc$original.metadata
+
+  # normalise RNA
+  sprintf('/// normalising RNA: %s', Project(seurat)) %>% message()
+  default_assay <- DefaultAssay(seurat)
+  DefaultAssay(seurat) <- 'RNA'
+  seurat %<>%
+    NormalizeData(verbose=FALSE)
+  DefaultAssay(seurat) <- default_assay
+
+  # run_pca
+  sprintf('/// running PCA: %s', Project(seurat)) %>% message()
+  seurat %<>%
+    FindVariableFeatures(selection.method='vst', nfeatures=3000, verbose=FALSE) %>%
+    RunPCA(npcs=70, verbose=FALSE)
+} else {
+  sprintf('/// no datasets to integrate for: %s', merged_map_name) %>% message()
+  seurat <- seurats[[1]]
+  seurat@misc$integrated_dataset <- FALSE
+}
+
+seurat@project.name <- merged_map_name
+
+#+ save_seurat
+save_seurat(seurat=seurat, save_path=save_path, script_name=provenance_name)
+
+#+ finish
+sprintf('/// done %s', seurat@project.name) %>% message()

@@ -1,0 +1,62 @@
+
+#'
+#' 1. read Seurat from cell ranger filtered matrix
+#' 2. read the filtering parameters table
+#' 3. filter Seurat object according to the filtering table
+#' 4. run PCA
+#' 5. save filtered Seurat object
+#'
+
+#+ load libraries
+library(Seurat)
+library(magrittr)
+library(tidyverse)
+
+getwd() %>% str_split('/') %>% unlist() %>% head(n=10) %>% str_c(collapse='/') %>% file.path(., 'scripts', 'seurat_processing', 'helper_functions.R') %>% source()
+
+packageVersion('Seurat') %>% sprintf(fmt='/// Seurat version: %s') %>% message()
+
+#+ collect_environment_variables
+input_seurat_rds <- Sys.getenv('INPUT_SEURAT_RDS')
+filtering_parameters <- Sys.getenv('FILTERING_PARAMETERS')
+save_path <- Sys.getenv('OUTPUT_PATH')
+
+#+ load_unfiltered_datasets
+sprintf('/// loading Seurat: %s', input_seurat_rds) %>% message()
+seurat <- readRDS(file=input_seurat_rds)
+
+#+ read_filtering_parameters
+sprintf('/// reading parameters: %s', filtering_parameters) %>% message()
+read.delim(file=filtering_parameters, header=TRUE, sep='\t', stringsAsFactors=FALSE) %>%
+  plyr::dlply(~dataset, pluck, 'subset') %>%
+  plyr::llply(function(x) parse(text=x)) -> subset_conditionals
+
+#+ filter_cells
+sprintf('/// filtering cells: %s', Project(seurat)) %>% message()
+if(!is.element(set=names(subset_conditionals), el=Project(seurat)))
+  sprintf('!!! dataset %s is not listed in filter file!') %>% stop()
+
+seurat@meta.data %<>%
+  rownames_to_column('cell_id') %>%
+  select(-starts_with('RNA_snn_res'), -seurat_clusters) %>%
+  column_to_rownames('cell_id')
+seurat@meta.data %>%
+  rownames_to_column('cell_id') %>%
+  filter(eval(subset_conditionals[[Project(seurat)]])) %>%
+  pluck('cell_id') -> cells_to_keep
+seurat@misc$original.metadata <- seurat@meta.data
+seurat %<>% subset(cells=cells_to_keep)
+seurat@misc$cells_filtered <- TRUE
+
+#+ run_pca
+sprintf('/// running PCA: %s', Project(seurat)) %>% message()
+for(reduction in Reductions(seurat))
+  seurat[[reduction]] <- NULL
+seurat %<>%
+  FindVariableFeatures(selection.method='vst', nfeatures=3000, verbose=FALSE) %>%
+  NormalizeData(verbose=FALSE) %>%
+  ScaleData(verbose=FALSE) %>%
+  RunPCA(verbose=FALSE)
+
+#+ save_object
+save_seurat(seurat=seurat, save_path=save_path)

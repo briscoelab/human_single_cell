@@ -1,0 +1,74 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+.libPaths(c("/camp/lab/briscoej/working/Rory/.conda/my_envs/r_lab/lib/R/library",
+          "/camp/lab/briscoej/working/Rory/R_packages",
+          "/camp/home/maizelr/R/x86_64-pc-linux-gnu-library/3.6",
+          "/camp/apps/eb/software/R/3.6.2-foss-2019b/lib64/R/library"))
+```
+
+
+```{r}
+# load libraries
+library(sctree);
+library(Seurat);
+library(ggplot2);
+library(cowplot);
+library(patchwork);
+library(plyr);
+library(dplyr);
+library(data.table);
+library(RColorBrewer);
+library(grDevices);
+```
+
+```{r}
+human <- readRDS('../../seurat_objects/human_celltyped.rds')
+```
+
+```{r}
+genes <- read.csv('genes.csv')
+```
+
+```{r}
+types <- c("p3","pMN","p2","p1","p0","V3","MN","V2a","V2b","V1","V0")
+
+DefaultAssay(human) <- 'RNA'
+
+h_sub <- human[,human$Type_step2 %in% types]
+
+DefaultAssay(h_sub) <- 'RNA'
+
+h_sub <- h_sub[genes$external_gene_name,]
+```
+
+```{r}
+unique(h_sub$orig.timepoint)
+tpdats <- c()
+tps <- c()
+for (tp in unique(h_sub$orig.timepoint)){
+  htp <- h_sub[,h_sub$orig.timepoint==tp]
+  hmu <- rowMeans(as.matrix(GetAssayData(htp, assay = 'RNA')))
+  tpdats <- c(tpdats, hmu)
+  tps <- c(tps, tp)
+}
+```
+
+```{r}
+df <- data.frame(matrix(ncol = 4, nrow = length(rownames(h_sub))))
+colnames(df) <- unique(h_sub$orig.timepoint)
+row.names(df) <- rownames(h_sub)
+for (tp in unique(h_sub$orig.timepoint)){
+  htp <- h_sub[,h_sub$orig.timepoint==tp]
+  hmu <- rowMeans(as.matrix(GetAssayData(htp, assay = 'RNA')))
+  df[tp] = hmu
+}
+
+```
+
+```{r}
+write.csv(x=df, file='agg_data.csv')
+```

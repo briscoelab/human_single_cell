@@ -1,0 +1,53 @@
+#! /bin/env Rscript
+
+#'
+#' 1. load integrated or normalised object
+#' 2. run JackStraw diagnostic
+#'
+
+#+ load libraries
+library(doMC, lib.loc='~/R/x86_64-pc-linux-gnu-library/3.6')
+library(future)
+library(Seurat)
+library(magrittr)
+library(tidyverse)
+
+getwd() %>% str_split('/') %>% unlist() %>% head(n=10) %>% str_c(collapse='/') %>% file.path(., 'scripts', 'seurat_processing', 'helper_functions.R') %>% source()
+
+packageVersion('Seurat') %>% sprintf(fmt='/// Seurat version: %s') %>% message()
+
+#+ collect_environment_variables
+input_seurat_rds <- Sys.getenv('INPUT_SEURAT_RDS')
+nthreads <- Sys.getenv('NTHREADS') %>% as.numeric()
+save_path <- Sys.getenv('OUTPUT_PATH')
+provenance_name <- Sys.getenv(x='PROVENANCE_NAME', unset=get_script_step_name())
+
+#+ setup
+doMC::registerDoMC(nthreads)
+
+plan(multiprocess, workers=nthreads)
+options(future.globals.maxSize=20*1024^3, future.globals.seed=TRUE) # change `future` max object size
+
+#+ load_seurat
+sprintf('/// Loading seurat: %s', input_seurat_rds) %>% message()
+seurat <- readRDS(file=input_seurat_rds)
+reduction_names <- Reductions(seurat) %>% str_subset('^pca')
+
+if(length(reduction_names)==0)
+  sprintf('!!! no reductions found in: %s!', Project(seurat)) %>% stop()
+
+#+ modify_jackstraw_to_warn_not_stop
+body(JackStraw)[[2]] <- substitute(if (reduction != "pca") warning("Only pca for reduction is currently supported"))
+
+#+ run_jackstraw
+for(reduction_name in reduction_names) {
+  sprintf('/// Running jackstraw: %s from %s into %s', DefaultAssay(seurat), Project(seurat), reduction_name) %>% message()
+  dims <- Embeddings(seurat, reduction=reduction_name) %>% ncol() # run for all dimensions in the PCA slot
+  seurat %<>% JackStraw(num.replicate=100, maxit=1000, dims=dims, reduction=reduction_name, verbose=FALSE) %>% ScoreJackStraw(reduction=reduction_name, dims=seq(dims))
+}
+
+#+ save_seurat
+save_seurat(seurat=seurat, save_path=save_path, script_name=provenance_name)
+
+#+ finish
+sprintf('/// done %s', seurat@project.name) %>% message()

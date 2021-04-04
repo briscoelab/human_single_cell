@@ -1,0 +1,158 @@
+---
+title: "4.6 pMN and p3 distances"
+output: html_notebook
+---
+
+```{r}
+.libPaths(c("/camp/lab/briscoej/working/Rory/.conda/my_envs/r_lab/lib/R/library",
+          "/camp/lab/briscoej/working/Rory/R_packages",
+          "/camp/home/maizelr/R/x86_64-pc-linux-gnu-library/3.6",
+          "/camp/apps/eb/software/R/3.6.2-foss-2019b/lib64/R/library"))
+```
+
+
+```{r}
+# load libraries
+library(sctree);
+library(Seurat);
+library(ggplot2);
+library(cowplot);
+library(patchwork);
+library(plyr);
+library(dplyr);
+library(data.table);
+library(RColorBrewer);
+library(grDevices);
+```
+
+```{r}
+human <- readRDS('../../seurat_objects/human_celltyped.rds')
+mouse <- readRDS('../../seurat_objects/mouse_celltyped.rds')
+```
+
+```{r}
+h_prog <- human[,(human$Type_step1=='Progenitor' | human$Type_step1=='Oligodendrocyte')]
+m_prog <- mouse[,(mouse$Type_step1=='Progenitor' | mouse$Type_step1=='Oligodendrocyte')]
+```
+
+```{r}
+h_tps <- unique(h_prog@meta.data$orig.timepoint)
+m_tps <- unique(m_prog@meta.data$orig.timepoint)
+
+process_dataset <- function(data, gene_names){
+  # subset only relevant cells, based on Olig2 and Nkx2-2
+  o.exp = GetAssayData(object = data, assay = "RNA", slot = "data")[gene_names[1],]
+  n.exp = GetAssayData(object = data, assay = "RNA", slot = "data")[gene_names[2],]
+  pos_cells <- names(which(o.exp>0 | n.exp>0))
+  subsetted_cells <- subset(data,cells=pos_cells)
+  
+  #classify each cell based on marker expression
+  so.exp = GetAssayData(object = subsetted_cells, assay = "RNA", slot = "data")[gene_names[1],]
+  sn.exp = GetAssayData(object = subsetted_cells, assay = "RNA", slot = "data")[gene_names[2],]
+  olig <- which(so.exp>0 & sn.exp==0)
+  nkx2 <- which(so.exp==0 & sn.exp>0)
+  both <- which(so.exp>0 & sn.exp>0)
+  
+  # add ID info
+  cell_ids <- rep(0,dim(subsetted_cells@meta.data)[1])
+  cell_ids[olig] <- 'Olig2+'
+  cell_ids[nkx2] <- 'Nkx2-2+'
+  cell_ids[both] <- 'Olig2+/Nkx2-2+'
+  subsetted_cells@meta.data['expression_type'] <- cell_ids
+  
+  # for SCT slot, we want to select highly variable genes for this relevant population
+  subsetted_cells <- FindVariableFeatures(subsetted_cells, nfeatures = 5000, assay = 'SCT');
+  
+  DefaultAssay(subsetted_cells) <- 'SCT'
+  all.genes <- rownames(subsetted_cells)
+  subsetted_cells <- ScaleData(subsetted_cells, features = all.genes);
+  
+  # rerun PCA & UMAP. Do for integrated, as this plots nicer, though SCT can be used for analysis since integrated doesn't contain the genes we care about.
+  subsetted_cells <- RunPCA(subsetted_cells, assay = 'integrated', npcs = 50, verbose = FALSE, reduction.name='sct_pca');
+  subsetted_cells <- RunUMAP(subsetted_cells, assay = 'integrated', reduction = "sct_pca", dims = 1:20, reduction.name='sct_umap', verbose = FALSE);
+  
+  return(subsetted_cells)
+}
+
+h.data <- process_dataset(h_prog, gene_names = c('OLIG2','NKX2-2'))
+m.data <- process_dataset(m_prog, gene_names = c('Olig2','Nkx2-2'))
+```
+
+
+
+```{r}
+pm <- which(h.data$Type_step2=='pMN')
+p3 <- which(h.data$Type_step2=='p3')
+dp <- which(h.data$expression_type=='Olig2+/Nkx2-2+')
+
+ids <- rep('NA',dim(h.data@meta.data)[1])
+ids[pm] <- 'pMN'
+ids[p3] <- 'p3'
+ids[dp] <- 'DP'
+
+h.data[['Type']] <- ids
+Idents(h.data) <- 'Type'
+```
+
+
+
+```{r}
+Idents(h.data) <- 'Type'
+
+euclidean <- function(a, b) sqrt(sum((a - b)^2))
+
+gex_dist <- function(data, tps, animal, its=100, size=50){
+  dist_df <- NULL
+  for (t in tps){
+    tp_data <- data[,data@meta.data$orig.timepoint==t]
+    dp_n2_dist <- c()
+    dp_o2_dist <- c()
+    for (i in 1:its){
+      set.seed(i)
+      idx <- sample(1:dim(tp_data)[2],size, replace = FALSE)
+      s.data <- tp_data[,idx]
+      ae <- AverageExpression(s.data, assays = 'SCT', verbose = FALSE)
+      n2_ae <- ae$SCT$`p3`
+      o2_ae <- ae$SCT$`pMN`
+      dp_ae <- ae$SCT$`DP`
+      nu_ae <- (n2_ae+o2_ae)/2
+      
+      dp_n2_dist <- c(dp_n2_dist, euclidean(dp_ae,n2_ae)/euclidean(nu_ae,n2_ae))
+      dp_o2_dist <- c(dp_o2_dist, euclidean(dp_ae,o2_ae)/euclidean(nu_ae,o2_ae))
+    }
+    tp_df <- data.frame(Group=rep(c("p3", "pMN"), times=c(length(dp_n2_dist),length(dp_o2_dist))),
+                        Distance=c(dp_n2_dist,dp_o2_dist), Timepoint=rep(t, times=length(dp_n2_dist)+length(dp_o2_dist)))
+    #mu <- ddply(tp_df, "GROUP", summarise, grp.mean=mean(DISTANCE))
+    #p<-ggplot(tp_df, aes(x=DISTANCE, color=GROUP)) +
+    #  geom_density()+
+    #  geom_vline(data=mu, aes(xintercept=grp.mean, color=GROUP),
+    #         linetype="dashed") + ggtitle(label = paste(animal,t,'DP Cell Average Distance'))
+    #print(p)
+    dist_df <- rbind(dist_df, tp_df)
+  }
+return(dist_df)
+}
+dist_df <- gex_dist(h.data, h_tps, 'Human')
+```
+
+
+```{r}
+c <- ggplot(dist_df, aes(factor(Timepoint), Distance, fill = Group)) +
+        scale_fill_manual(values=c("#85CD94","#8588BE")) +
+        geom_violin(scale = "width", adjust = 1, trim = TRUE) +
+        theme_cowplot(font_size = 12) +
+        theme(panel.spacing = unit(0, "lines"),
+              panel.background = element_rect(fill = NA, color = "black"),
+              strip.background = element_blank(),
+              strip.text = element_text(face = "bold"),
+              strip.text.y.left = element_text(angle = 0),
+              axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+        ggtitle("Human: Transcriptional Distance From DP Cells") + xlab("Timepoint") + ylab("Transcriptional Distance") +
+        scale_y_continuous(breaks=seq(0,10,1)) +
+        geom_vline(xintercept=seq(1.5,3.5,1), colour='grey', linetype=3)
+c
+
+ggsave('../plots/4_DP_cells_HUMAN_DISTANCE_VIOLIN.pdf')
+```
+
+

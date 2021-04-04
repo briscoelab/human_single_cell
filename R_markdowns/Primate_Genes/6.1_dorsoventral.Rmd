@@ -1,0 +1,331 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r}
+.libPaths(c("/camp/lab/briscoej/working/Rory/.conda/my_envs/r_lab/lib/R/library",
+          "/camp/lab/briscoej/working/Rory/R_packages",
+          "/camp/home/maizelr/R/x86_64-pc-linux-gnu-library/3.6",
+          "/camp/apps/eb/software/R/3.6.2-foss-2019b/lib64/R/library"))
+```
+
+
+```{r}
+# load libraries
+library(sctree);
+library(Seurat);
+library(ggplot2);
+library(cowplot);
+library(patchwork);
+library(plyr);
+library(dplyr);
+library(data.table);
+library(RColorBrewer);
+library(grDevices);
+```
+
+```{r}
+human <- readRDS('../../seurat_objects/human_celltyped.rds')
+```
+
+```{r}
+h_neur <- human[,(human$Type_step1=='Progenitor')]
+```
+
+```{r}
+h_neur <- h_neur[,h_neur$Type_step2!='Null_Progenitor']
+```
+
+
+```{r}
+pgs <- read.csv('primate_genes.txt', sep='\n', stringsAsFactors = FALSE)
+p_genes <- pgs$GENE
+```
+
+
+```{r}
+DefaultAssay(h_neur) <- 'SCT'
+Idents(h_neur) <- 'Type_step2'
+exdata <- as.data.frame(h_neur, genes = p_genes)
+identity <- Idents(h_neur)
+exdata$Cell <- rownames(exdata)
+exdata$Type <- identity
+#names(exdata) <- gsub('.','-',names(exdata), fixed = TRUE)
+exdata <- reshape2::melt(exdata, id.vars = c("Cell","Type"), measure.vars = p_genes,
+                         variable.name = "Gene", value.name = "Expression")
+
+exdata %>%
+  group_by(Type, Gene) %>%
+  summarise(mean_value=mean(Expression)) %>%
+  group_by(Gene) %>%
+  mutate(mean_value_scaled=mean_value/max(mean_value)) -> exdata
+
+```
+
+```{r}
+domains <- c("FP","p3","pMN","p2","p1","p0","dp6","dp5","dp4","dp3","dp2","dp1","RP")
+cols <- c("#50abe2","#50abe2","#50abe2","#50abe2","#50abe2","#50abe2","#f14624ff","#6D6E70","#6D6E70","#6D6E70","#85CD94","#8588BE","#f14624ff")
+
+ggplot(data=exdata) +
+      aes(x=Gene, y=factor(Type, levels=domains), size=mean_value, fill=Type) +
+      geom_point(shape=21, stroke=0.6) +
+      scale_fill_manual(values=(cols)) +
+      scale_x_discrete(position='bottom') +
+      scale_size_area(max_size=3) + 
+      guides(fill='none', size=guide_legend()) +
+      theme(axis.text.x=element_text(angle=45, hjust=1, vjust=1, size=rel(0.7)),
+            axis.title.x=element_blank(),
+            panel.grid.major.x=element_line()) + 
+      labs(x='Gene', y='Cell Type', fill='Cell Type', size='Mean\nExpression') + 
+      ggtitle('Primate Specific Gene Expression in Progenitors')
+
+ggsave('../plots/6_PSG_PROGENITOR_DOTPLOT.pdf')
+```
+
+```{r}
+h_neur <- human[,(human$Type_step1=='Neuron')]
+h_neur <- h_neur[,h_neur$Type_step2!='Null_Neuron']
+DefaultAssay(h_neur) <- 'SCT'
+Idents(h_neur) <- 'Type_step2'
+exdata <- as.data.frame(h_neur, genes = p_genes)
+identity <- Idents(h_neur)
+exdata$Cell <- rownames(exdata)
+exdata$Type <- identity
+#names(exdata) <- gsub('.','-',names(exdata), fixed = TRUE)
+exdata <- reshape2::melt(exdata, id.vars = c("Cell","Type"), measure.vars = p_genes,
+                         variable.name = "Gene", value.name = "Expression")
+
+exdata %>%
+  group_by(Type, Gene) %>%
+  summarise(mean_value=mean(Expression)) %>%
+  group_by(Gene) %>%
+  mutate(mean_value_scaled=mean_value/max(mean_value)) -> exdata
+
+
+```
+
+```{r}
+domains <- c("V3","MN","V2a","V2b","V1","V0","dl6","dl5","dl4","dl3","dl2","dl1")
+cols <- c("#85CD94","#6D6E70","#6D6E70","#6D6E70","#6D6E70","#8588BE","#50abe2","#50abe2","#50abe2","#50abe2","#50abe2","#50abe2")
+cols <- c("#50abe2","#50abe2","#50abe2","#50abe2","#50abe2","#50abe2","#8588BE","#6D6E70","#6D6E70","#6D6E70","#6D6E70","#85CD94")
+ggplot(data=exdata) +
+      aes(x=Gene, y=factor(Type, levels=domains), size=mean_value, fill=Type) +
+      geom_point(shape=21, stroke=0.6) +
+      scale_x_discrete(position='bottom') +
+      scale_size_area(max_size=3) + 
+      scale_fill_manual(values=(cols)) +
+      guides(fill='none', size=guide_legend()) +
+      theme(axis.text.x=element_text(angle=45, hjust=1, vjust=1, size=rel(0.7)),
+            axis.title.x=element_blank(),
+            panel.grid.major.x=element_line()) + 
+      labs(x='Gene', y='Cell Type', fill='Cell Type', size='Mean\nExpression') + 
+      ggtitle('Primate Specific Gene Expression in Neurons')
+
+ggsave('../plots/6_PSG_NEURON_DOTPLOT.pdf')
+```
+
+
+
+```{r}
+h_neur <- human[,(human$Type_step1=='Progenitor' | human$Type_step1=='Neuron')]
+h_neur <- h_neur[,(h_neur$Type_step2!='Null_Progenitor'& h_neur$Type_step2!='Null_Neuron')]
+
+k_genes <- c('SMN2', 'ARHGAP11B', 'NBPF14', 'NOTCH2NL', 'FAM72D')
+```
+```{r}
+h_neur[['Timepoint']] = h_neur$orig.timepoint
+DefaultAssay(h_neur) <- 'RNA'
+Idents(h_neur) <- 'Timepoint'
+exdata <- as.data.frame(h_neur, genes = k_genes)
+identity <- Idents(h_neur)
+exdata$Cell <- rownames(exdata)
+exdata$Idents <- identity
+exdata$Type <- h_neur$Type_step1
+#names(exdata) <- gsub('.','-',names(exdata), fixed = TRUE)
+exdata <- reshape2::melt(exdata, id.vars = c("Cell","Idents","Type"), measure.vars = k_genes,
+                         variable.name = "Feat", value.name = "Expr")
+
+c1 <- ggplot(exdata, aes(factor(Feat), Expr, colour = Type)) +
+        geom_jitter(alpha=0.15, size=.5) +
+        geom_violin(scale = "width", adjust = 1, trim = TRUE, alpha=0.25) +
+        scale_y_continuous(expand = c(0, 0), position="right", labels = function(x)
+                           c(rep(x = "", times = length(x)-2), x[length(x) - 1], "")) +
+        #facet_grid(rows = vars(Idents), scales = "free", switch = "y") +
+        theme_cowplot(font_size = 12) +
+        theme(panel.spacing = unit(0, "lines"),
+              panel.background = element_rect(fill = NA, color = "black"),
+              strip.background = element_blank(),
+              strip.text = element_text(face = "bold"),
+              strip.text.y.left = element_text(angle = 0),
+              axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+        ggtitle("Primate Specific Gene Expression") + xlab("Gene") + ylab("Expression Level") + 
+        guides(colour = guide_legend(override.aes = list(alpha = 1)))
+
+c1
+
+ggsave('../plots/6_PSG_JITTER_VIOLIN.pdf')
+```
+
+```{r}
+h_neur <- human[,(human$Type_step1=='Neuron')]
+h_neur <- h_neur[,h_neur$Type_step2!='Null_Neuron']
+DefaultAssay(h_neur) <- 'SCT'
+Idents(h_neur) <- 'orig.timepoint'
+exdata <- as.data.frame(h_neur, genes = p_genes)
+identity <- Idents(h_neur)
+exdata$Cell <- rownames(exdata)
+exdata$Timepoint <- identity
+#names(exdata) <- gsub('.','-',names(exdata), fixed = TRUE)
+exdata <- reshape2::melt(exdata, id.vars = c("Cell","Timepoint"), measure.vars = p_genes,
+                         variable.name = "Gene", value.name = "Expression")
+
+exdata %>%
+  group_by(Timepoint, Gene) %>%
+  summarise(mean_value=mean(Expression)) %>%
+  group_by(Gene) %>%
+  mutate(mean_value_scaled=mean_value/max(mean_value)) -> exdata
+```
+
+```{r}
+ggplot(data=exdata) +
+      aes(x=Gene, y=Timepoint, size=mean_value, fill=Timepoint) +
+      geom_point(shape=21, stroke=0.6) +
+      scale_x_discrete(position='bottom') +
+      scale_size_area(max_size=3) + 
+      guides(fill='none', size=guide_legend()) +
+      theme(axis.text.x=element_text(angle=45, hjust=1, vjust=1, size=rel(0.7)),
+            axis.title.x=element_blank(),
+            aspect.ratio=0.25,
+            panel.grid.major.x=element_line()) + 
+      labs(x='Gene', y='Timepoint', fill='Timepoint', size='Mean\nExpression') + 
+      ggtitle('Primate Specific Gene Expression in Neurons')
+
+ggsave('../plots/6_PSG_NEURON_TEMPORAL_DOTPLOT.pdf')
+```
+
+```{r}
+h_neur <- human[,(human$Type_step1=='Progenitor')]
+h_neur <- h_neur[,h_neur$Type_step2!='Null_Progenitor']
+DefaultAssay(h_neur) <- 'SCT'
+Idents(h_neur) <- 'orig.timepoint'
+exdata <- as.data.frame(h_neur, genes = p_genes)
+identity <- Idents(h_neur)
+exdata$Cell <- rownames(exdata)
+exdata$Timepoint <- identity
+#names(exdata) <- gsub('.','-',names(exdata), fixed = TRUE)
+exdata <- reshape2::melt(exdata, id.vars = c("Cell","Timepoint"), measure.vars = p_genes,
+                         variable.name = "Gene", value.name = "Expression")
+
+exdata %>%
+  group_by(Timepoint, Gene) %>%
+  summarise(mean_value=mean(Expression)) %>%
+  group_by(Gene) %>%
+  mutate(mean_value_scaled=mean_value/max(mean_value)) -> exdata
+```
+
+```{r}
+ggplot(data=exdata) +
+      aes(x=Gene, y=Timepoint, size=mean_value, fill=Timepoint) +
+      geom_point(shape=21, stroke=0.6) +
+      scale_x_discrete(position='bottom') +
+      scale_size_area(max_size=3) + 
+      guides(fill='none', size=guide_legend()) +
+      theme(axis.text.x=element_text(angle=45, hjust=1, vjust=1, size=rel(0.7)),
+            axis.title.x=element_blank(),
+            aspect.ratio=0.25,
+            panel.grid.major.x=element_line()) + 
+      labs(x='Gene', y='Timepoint', fill='Timepoint', size='Mean\nExpression') + 
+      ggtitle('Primate Specific Gene Expression in Progenitors')
+
+ggsave('../plots/6_PSG_PROGENITOR_TEMPORAL_DOTPLOT.pdf')
+```
+
+
+```{r}
+cns <- c('Progenitor','Neuron')
+ncc <- c("Neural Crest I","Neural Crest II","Neural Crest III","Neural crest neurons III","Neural crest neurons II","Neural crest neurons III")
+mdc <- c("Mesoderm III","Mesoderm II","Mesoderm I","Mesoderm IV","Mesoderm V")
+```
+
+
+```{r}
+cell_type <- rep("Other",dim(human@meta.data)[1])
+cell_type[which(human$Type_step1=='Progenitor')] <- 'Neural Progenitor'
+cell_type[which(human$Type_step1=='Neuron')] <- 'Neuron'
+cell_type[which(human$Type_step1 %in% ncc)] <- 'Neural Crest'
+cell_type[which(human$Type_step1 %in% mdc)] <- 'Mesoderm'
+
+DefaultAssay(human) <- 'SCT'
+exdata <- as.data.frame(human, genes = p_genes)
+identity <- Idents(human)
+exdata$Cell <- rownames(exdata)
+exdata$Type <- cell_type
+#names(exdata) <- gsub('.','-',names(exdata), fixed = TRUE)
+exdata <- reshape2::melt(exdata, id.vars = c("Cell","Type"), measure.vars = p_genes,
+                         variable.name = "Gene", value.name = "Expression")
+
+exdata %>%
+  group_by(Type, Gene) %>%
+  summarise(mean_value=mean(Expression)) %>%
+  group_by(Gene) %>%
+  mutate(mean_value_scaled=mean_value/max(mean_value)) -> exdata
+```
+
+```{r}
+ggplot(data=exdata) +
+      aes(x=Gene, y=factor(Type, levels=rev(c('Neural Progenitor',"Neuron","Neural Crest","Mesoderm",'Other'))), size=mean_value, fill=Type) +
+      geom_point(shape=21, stroke=0.6) +
+      scale_x_discrete(position='bottom') +
+      scale_size_area(max_size=3) + 
+      guides(fill='none', size=guide_legend()) +
+      theme(axis.text.x=element_text(angle=45, hjust=1, vjust=1, size=rel(0.7)),
+            axis.title.x=element_blank(),
+            aspect.ratio=0.25,
+            panel.grid.major.x=element_line()) + 
+      labs(x='Gene', y='Cell Type', fill='Cell Type', size='Mean\nExpression') + 
+      ggtitle('Primate Specific Gene Expression Across Cell Types')
+
+ggsave('../plots/6_PSG_DOTPLOT_ACROSS_CELLTYPES.pdf')
+```
+
+```{r}
+k_genes <- c('SMN2', 'ARHGAP11B', 'NBPF14', 'NOTCH2NL', 'FAM72D')
+
+cell_type <- rep("Other",dim(human@meta.data)[1])
+cell_type[which(human$Type_step1=='Progenitor')] <- 'Neural Progenitor'
+cell_type[which(human$Type_step1=='Neuron')] <- 'Neuron'
+cell_type[which(human$Type_step1 %in% ncc)] <- 'Neural Crest'
+cell_type[which(human$Type_step1 %in% mdc)] <- 'Mesoderm'
+
+DefaultAssay(human) <- 'SCT'
+exdata <- as.data.frame(human, genes = k_genes)
+identity <- Idents(human)
+exdata$Cell <- rownames(exdata)
+exdata$Type <- cell_type
+#names(exdata) <- gsub('.','-',names(exdata), fixed = TRUE)
+exdata <- reshape2::melt(exdata, id.vars = c("Cell","Type"), measure.vars = k_genes,
+                         variable.name = "Gene", value.name = "Expression")
+
+exdata %>%
+  group_by(Type, Gene) %>%
+  summarise(mean_value=mean(Expression)) %>%
+  group_by(Gene) %>%
+  mutate(mean_value_scaled=mean_value/max(mean_value)) -> exdata
+
+ggplot(data=exdata) +
+      aes(x=Gene, y=factor(Type, levels=rev(c('Neural Progenitor',"Neuron","Neural Crest","Mesoderm",'Other'))), size=mean_value, fill=Type) +
+      geom_point(shape=21, stroke=0.6) +
+      scale_x_discrete(position='bottom') +
+      scale_size_area(max_size=3) + 
+      guides(fill='none', size=guide_legend()) +
+      theme(axis.text.x=element_text(angle=45, hjust=1, vjust=1, size=rel(0.7)),
+            axis.title.x=element_blank(),
+            aspect.ratio=0.25,
+            panel.grid.major.x=element_line()) + 
+      labs(x='Gene', y='Cell Type', fill='Cell Type', size='Mean\nExpression') + 
+      ggtitle('Primate Specific Gene Expression Across Cell Types')
+
+ggsave('../plots/6_PSG_DOTPLOT_KEYGENES_CELLTYPES.pdf')
+```
+
+

@@ -1,0 +1,265 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+.libPaths(c("/camp/lab/briscoej/working/Rory/.conda/my_envs/r_lab/lib/R/library",
+          "/camp/lab/briscoej/working/Rory/R_packages",
+          "/camp/home/maizelr/R/x86_64-pc-linux-gnu-library/3.6",
+          "/camp/apps/eb/software/R/3.6.2-foss-2019b/lib64/R/library"))
+```
+
+
+```{r}
+# load libraries
+library(sctree);
+library(Seurat);
+library(ggplot2);
+library(cowplot);
+library(patchwork);
+library(plyr);
+library(dplyr);
+library(data.table);
+library(RColorBrewer);
+library(grDevices);
+```
+
+```{r}
+human <- readRDS('../../seurat_objects/human_celltyped.rds')
+mouse <- readRDS('../../seurat_objects/mouse_celltyped.rds')
+```
+
+```{r}
+# from Antler
+fastCor <- function(x, method='spearman', subdims){
+  if(method=='spearman'){
+    # rank features
+    x = t(apply(t(x), 1, rank))
+  } else if(method=='pearson'){
+    x = t(x)
+  } else {
+    stop("Fast correlation works only with 'spearman' or 'pearson'")
+  }
+  # Center each variable
+  x = x - rowMeans(x);
+  # Standardize each variable
+  x = x / sqrt(rowSums(x^2));
+
+  # Calculate correlations
+  if(missing(subdims)){
+    return(tcrossprod(x))
+  } else {
+    return(tcrossprod(x, x[subdims, , drop=F]))
+  }
+
+}
+
+# from Sanchez-Taltavull et al., NAR Genomics and Bioinformatics 2:1, 2020
+BaCo <- function(X){
+  
+  alpha0 <- rep(1/nrow(X),ncol(X))
+  beta0=1-alpha0
+  nrowsX <- nrow(X)
+  k <- ncol(X)
+  cs <- colSums(X)
+  alphas <- alpha0 + X
+  betas  <- matrix(rep(beta0,nrowsX), nrow=nrowsX, byrow=TRUE) + matrix(rep(cs,nrowsX), nrow=nrowsX, byrow=TRUE) - X
+  alphasPLUSbetas <- alphas + betas
+  Psi <- alphas/alphasPLUSbetas - matrix(rep(rowSums(alphas/alphasPLUSbetas)/k, k), ncol=k, byrow=FALSE) 
+  var_vec <- as.matrix( ( rowSums( (alphas*betas)/( (alphasPLUSbetas^2)*(alphasPLUSbetas+1) ) ) + rowSums(Psi^2) )/k )
+  cov_mtrx <- (Psi %*% t(Psi))/k
+  Bcorrvals <- cov_mtrx / sqrt( var_vec %*% t(var_vec) )
+  diag(Bcorrvals) <- 1
+  return(Bcorrvals)
+}
+```
+
+
+```{r}
+hfp <- human[,human$Type_step2=='FP']
+mfp <- mouse[,mouse$Type_step2=='FP']
+```
+
+
+```{r}
+hfp2 <- hfp[,hfp$orig.timepoint!='CS19']
+```
+
+
+```{r}
+DefaultAssay(hfp) <- 'SCT'
+hfp2 <- FindVariableFeatures(hfp, nfeatures = 1000, mean.cutoff = c(0.1, 8))
+hfp2 <- hfp2[VariableFeatures(hfp2),]
+exp_mat <- GetAssayData(object = hfp2, assay = 'SCT')
+exp_dat <- as.matrix(exp_mat)
+```
+
+
+```{r}
+cor_M <- fastCor(t(exp_dat))
+```
+
+```{r}
+pax7_cors <- sort(cor_M[,'PAX7'], decreasing = TRUE)
+```
+
+```{r}
+genes <- names(head(pax7_cors, 30))[c(-3,-12, -22, -24,-25,-29)]
+DefaultAssay(hfp) <- 'RNA'
+Idents(hfp) <- 'orig.timepoint'
+exdata <- as.data.frame(hfp, genes = genes)
+identity <- Idents(hfp)
+exdata$Cell <- rownames(exdata)
+exdata$Timepoint <- identity
+# names(exdata) <- gsub('.','-',names(exdata), fixed = TRUE)
+exdata <- reshape2::melt(exdata, id.vars = c("Cell","Timepoint"), measure.vars = genes,
+                         variable.name = "Feat", value.name = "Expr")
+
+exdata <- exdata[sample(nrow(exdata)),]
+
+c1 <- ggplot(exdata, aes(factor(Feat), Expr, fill = Timepoint)) +
+        geom_jitter(position = position_jitter(0.2), alpha=0.8, aes(colour=Timepoint), size=.5) + scale_color_manual(values=rev(brewer.pal(4, 'Spectral'))) +
+        # geom_violin(scale = "width", adjust = 1, trim = TRUE, alpha=0.25) +
+        scale_y_continuous(expand = c(0, 0), position="left", labels = function(x)
+                           c(rep(x = "", times = length(x)-2), x[length(x) - 1], "")) +
+        # facet_grid(rows = vars(Idents), scales = "free", switch = "y") +
+        theme_cowplot(font_size = 12) +
+        theme(panel.spacing = unit(0, "lines"),
+              panel.background = element_rect(fill = NA, color = "black"),
+              strip.background = element_blank(),
+              legend.text = element_text(size=7),
+              legend.title = element_text(size=7),
+              strip.text = element_text(face = "bold"),
+              strip.text.y.left = element_text(angle = 0),
+              axis.text.x = element_text(angle = 45, size = rel(0.7), hjust = 1, vjust = 1)) +
+        ggtitle("Human FP") + xlab("") + ylab("Expression Level")
+  
+
+c1
+```
+
+
+
+
+```{r}
+genes <- names(head(pax7_cors, 30))[c(-3,-12, -22, -24,-25,-29)]
+genes <- tools::toTitleCase(tolower(genes))
+
+
+color_ID <- rep('NA',dim(mfp@meta.data)[1])
+m_tps <- unique(mfp@meta.data$orig.timepoint)
+
+for (t in m_tps){
+  color_ID[which(mfp@meta.data$orig.timepoint==t)] = gsub('5','.5',tolower(t))
+}
+
+mfp@meta.data['t_color'] = color_ID 
+
+DefaultAssay(mfp) <- 'RNA'
+Idents(mfp) <- 't_color'
+exdata <- as.data.frame(mfp, genes = genes)
+identity <- Idents(mfp)
+exdata$Cell <- rownames(exdata)
+exdata$Timepoint <- identity
+# names(exdata) <- gsub('.','-',names(exdata), fixed = TRUE)
+exdata <- reshape2::melt(exdata, id.vars = c("Cell","Timepoint"), measure.vars = genes,
+                         variable.name = "Feat", value.name = "Expr")
+
+exdata <- exdata[sample(nrow(exdata)),]
+
+c2 <- ggplot(exdata, aes(factor(Feat), Expr, fill = Timepoint)) +
+        geom_jitter(position = position_jitter(0.1), alpha=0.9, aes(colour=Timepoint), size=.5) +
+        # geom_violin(scale = "width", adjust = 1, trim = TRUE, alpha=0.25) +
+        scale_y_continuous(expand = c(0, 0), position="left", labels = function(x)
+                           c(rep(x = "", times = length(x)-2), x[length(x) - 1], "")) + 
+        scale_color_manual(breaks=(c('e9.5','e10.5','e11.5','e12.5','e13.5')), values=rev(brewer.pal(5, 'Spectral'))) +
+        # facet_grid(rows = vars(Idents), scales = "free", switch = "y") +
+        theme_cowplot(font_size = 12) +
+        theme(panel.spacing = unit(0, "lines"),
+              legend.position = 'left',
+              panel.background = element_rect(fill = NA, color = "black"),
+              strip.background = element_blank(),
+              strip.text = element_text(face = "bold"),
+              legend.text = element_text(size=7),
+              legend.title = element_text(size=7),
+              axis.title.y=element_blank(),
+              strip.text.y.left = element_text(angle = 0),
+              axis.text.x = element_text(angle = 45, size = rel(0.7), hjust = 1, vjust = 1)) +
+        ggtitle("Mouse FP") + xlab("") + ylab("Expression Level")
+
+c2
+```
+
+
+```{r}
+library(gridExtra)
+```
+
+```{r}
+grid.arrange(c1,c2)
+```
+
+
+```{r}
+dis <- c('dp3','dp4','dp5','dp6')
+
+hpd <- human[,human$Type_step2 %in% dis]
+```
+
+```{r}
+genes <- names(head(pax7_cors, 30))[c(-3,-12, -22, -24,-25,-29)]
+
+DefaultAssay(hpd) <- 'RNA'
+Idents(hpd) <- 'orig.timepoint'
+exdata <- as.data.frame(hpd, genes = genes)
+identity <- Idents(hpd)
+exdata$Cell <- rownames(exdata)
+exdata$Timepoint <- identity
+# names(exdata) <- gsub('.','-',names(exdata), fixed = TRUE)
+exdata <- reshape2::melt(exdata, id.vars = c("Cell","Timepoint"), measure.vars = genes,
+                         variable.name = "Feat", value.name = "Expr")
+
+exdata <- exdata[sample(nrow(exdata)),]
+
+
+c3 <- ggplot(exdata, aes(factor(Feat), Expr, fill = Timepoint)) +
+        geom_jitter(position = position_jitter(0.2), alpha=0.4, aes(colour=Timepoint), size=.5) +
+  scale_color_manual(values=rev(brewer.pal(4, 'Spectral'))) +
+        # geom_violin(scale = "width", adjust = 1, trim = TRUE, alpha=0.25) +
+        scale_y_continuous(expand = c(0, 0), position="left", labels = function(x)
+                           c(rep(x = "", times = length(x)-2), x[length(x) - 1], "")) +
+      
+        # facet_grid(rows = vars(Idents), scales = "free", switch = "y") +
+        theme_cowplot(font_size = 12) +
+        theme(panel.spacing = unit(0, "lines"),
+              legend.position = 'none',
+              panel.background = element_rect(fill = NA, color = "black"),
+              strip.background = element_blank(),
+              axis.title.y=element_blank(),
+              strip.text = element_text(face = "bold"),
+              strip.text.y.left = element_text(angle = 0),
+              axis.text.x = element_text(angle = 45, size = rel(0.7), hjust = 1, vjust = 1)) +
+        ggtitle("Human pD") + xlab("") + ylab("Expression Level")
+  
+
+c3
+```
+
+
+```{r}
+ggdraw() +
+  draw_plot(c1, 0, .5, 1, .5) +
+  draw_plot(c2, 0, 0, .5, .5) +
+  draw_plot(c3, .5, 0, .5, .5)
+
+ggsave('../plots/7_comparison_jitter.pdf')
+```
+
+
+
+
+
+
+
+

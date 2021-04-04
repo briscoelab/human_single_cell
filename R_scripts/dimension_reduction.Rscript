@@ -1,0 +1,66 @@
+#! /bin/env Rscript
+
+#'
+#' 1. load integrated or normalised object
+#' 2. run TSNE and UMAP on PCA* with both 2 and 3 dimension outputs
+#' 3. save objects
+#'
+
+#+ load libraries
+library(Seurat)
+library(magrittr)
+library(tidyverse)
+
+getwd() %>% str_split('/') %>% unlist() %>% head(n=10) %>% str_c(collapse='/') %>% file.path(., 'scripts', 'seurat_processing', 'helper_functions.R') %>% source()
+
+packageVersion('Seurat') %>% sprintf(fmt='/// Seurat version: %s') %>% message()
+
+#+ collect_environment_variables
+input_seurat_rds <- Sys.getenv('INPUT_SEURAT_RDS')
+n_dimensions <- Sys.getenv('N_DIMENSIONS') %>% as.numeric()
+save_path <- Sys.getenv('OUTPUT_PATH')
+provenance_name <- Sys.getenv(x='PROVENANCE_NAME', unset=get_script_step_name())
+
+#+ load_seurat
+sprintf('/// Loading seurat: %s', input_seurat_rds) %>% message()
+seurat <- readRDS(file=input_seurat_rds)
+reduction_names <- Reductions(seurat) %>% str_subset('^pca')
+reduction_names <- 'pca'
+
+if(length(reduction_names)==0)
+  sprintf('!!! no reductions found in: %s!', Project(seurat)) %>% stop()
+
+if(!any(is.element(set=Reductions(seurat), el=reduction_names)))
+  stop('!!! reductions missing?!')
+
+#+ define_number_of_dimensions_per_dataset
+message('/// Defining number of dimensions for dataset')
+seurat@misc$n_dimensions <- n_dimensions
+
+#+ get_tsne_coords
+for(reduction_name in reduction_names) {
+  reduction_name_append <- if_else(reduction_name=='pca', '', str_remove_all(string=reduction_name, pattern='_'))
+
+  sprintf('/// Getting 2D tSNE for %s from %s', reduction_name, Project(seurat)) %>% message()
+  seurat %<>% RunTSNE(dims=seq(n_dimensions), reduction=reduction_name, reduction.name=sprintf('tsne%s', reduction_name_append), reduction.key=sprintf('tSNE%s_', str_to_upper(reduction_name_append)), dim.embed=2, seed.use=1, verbose=FALSE, check_duplicates=FALSE)
+
+  sprintf('/// Getting 3D tSNE for %s from %s', reduction_name, Project(seurat)) %>% message()
+  seurat %<>% RunTSNE(dims=seq(n_dimensions), reduction=reduction_name, reduction.name=sprintf('tsne_3d%s', reduction_name_append), reduction.key=sprintf('tSNE3D%s_', str_to_upper(reduction_name_append)), dim.embed=3, seed.use=1, verbose=FALSE, check_duplicates=FALSE)
+}
+
+#+ get_umap_coords
+for(reduction_name in reduction_names) {
+  reduction_name_append <- if_else(reduction_name=='pca', '', str_remove_all(string=reduction_name, pattern='_'))
+
+  sprintf('/// Getting 2D UMAP for %s from %s', reduction_name, Project(seurat)) %>% message()
+  seurat %<>% RunUMAP(dims=seq(n_dimensions), reduction=reduction_name, reduction.name=sprintf('umap%s', reduction_name_append), reduction.key=sprintf('UMAP%s_', str_to_upper(reduction_name_append)), n.components=2, seed.use=1, verbose=FALSE)
+
+  sprintf('/// Getting 3D UMAP for %s from %s', reduction_name, Project(seurat)) %>% message()
+  seurat %<>% RunUMAP(dims=seq(n_dimensions), reduction=reduction_name, reduction.name=sprintf('umap_3d%s', reduction_name_append), reduction.key=sprintf('UMAP3D%s_', str_to_upper(reduction_name_append)), n.components=3, seed.use=1, verbose=FALSE)
+}
+
+#+ save_seurat
+save_seurat(seurat=seurat, save_path=save_path, script_name=provenance_name)
+
+#+ finish
+sprintf('/// done %s', seurat@project.name) %>% message()
